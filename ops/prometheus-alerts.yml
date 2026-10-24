@@ -1,0 +1,2 @@
+# Deprecated duplicate. Compose loads ops/prometheus/alerts.yml via prometheus.yml.
+# Kept as a stub so old doc links do not 404 conceptually — do not edit rules here.

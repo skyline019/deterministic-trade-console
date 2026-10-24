@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # Requires METRICS_READ bearer (ops/secrets/metrics_bearer.token). See scripts/obs-alert-drill.sh.
+  - job_name: deterministic-trade
+    metrics_path: /actuator/prometheus
+    bearer_token_file: /etc/prometheus/secrets/metrics_bearer.token
+    static_configs:
+      - targets: ["app:8080"]

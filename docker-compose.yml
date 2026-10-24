@@ -1,0 +1,120 @@
+name: deterministic-trade
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: trade
+      MYSQL_USER: trade
+      MYSQL_PASSWORD: trade
+      MYSQL_ROOT_PASSWORD: root-demo-only
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        ALL_PROXY: ${ALL_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,mysql,redis,caddy}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+    # Optional external secrets file (see docs/secrets.md). Missing file is OK.
+    env_file:
+      - path: ops/secrets/.env
+        required: false
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: trade
+      MYSQL_USER: ${MYSQL_USER:-trade}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-trade}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      DB_POOL_SIZE: 32
+      TRADE_LOCK_TTL: 10s
+      TRADE_TX_TIMEOUT_SECONDS: 5
+      ACCESS_TOKEN_TTL: 8h
+      BCRYPT_STRENGTH: 12
+      LOGIN_ATTEMPT_LIMIT: 10
+      LOGIN_WINDOW: 5m
+      API_ATTEMPT_LIMIT: 300
+      API_WINDOW: 1m
+      # Cookie delivery requires TLS (Caddy :8443). Direct :8080 remains Bearer-only.
+      TRADE_COOKIE_SECURE: "true"
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-local-admin-only}
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8-alpine
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./ops/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  prometheus:
+    profiles: ["obs"]
+    image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-lifecycle
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      # METRICS_READ bearer (one line). Create via scripts/obs-alert-drill.sh; gitignored.
+      - ./ops/secrets/metrics_bearer.token:/etc/prometheus/secrets/metrics_bearer.token:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  alertmanager:
+    profiles: ["obs"]
+    image: prom/alertmanager:v0.27.0
+    volumes:
+      - ./ops/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  redis-data:
+  caddy-data:
+  caddy-config:

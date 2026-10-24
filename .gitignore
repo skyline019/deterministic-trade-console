@@ -1,0 +1,42 @@
+# Build
+target/
+frontend/dist/
+frontend/node_modules/
+.m2/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+.sudo_as_admin_successful
+
+# Logs / local
+*.log
+.env
+.env.*
+!.env.example
+!.env.demo
+
+# Secrets (never commit)
+ops/secrets/.env
+ops/secrets/*.token
+ops/secrets/*.pem
+ops/secrets/*.key
+
+# Playwright / Vitest artifacts
+frontend/test-results/
+frontend/playwright-report/
+frontend/playwright-report-*/
+frontend/blob-report/
+frontend/playwright/.cache/
+
+# Misc / local scratch
+*.swp
+*~
+.cursor/
+graphify-out/
+_*.sh
+_*.class
+*.class
+.sudo_as_admin_successful

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="420" viewBox="0 0 920 420" role="img" aria-labelledby="title desc">
+  <title id="title">Deterministic Trade architecture</title>
+  <desc id="desc">Vue console to handlers to application ports to MySQL fact source and Redis mutex</desc>
+  <rect width="920" height="420" fill="#0f1419"/>
+  <text x="32" y="36" fill="#e7ecf1" font-family="Segoe UI, sans-serif" font-size="18" font-weight="600">Deterministic Trade  hexagonal slice</text>
+  <rect x="40" y="64" width="840" height="64" rx="8" fill="#1a2332" stroke="#3d7ea6"/>
+  <text x="60" y="102" fill="#c8d6e5" font-family="Segoe UI, sans-serif" font-size="16">Vue 3 console · same-origin JSON · Bearer / optional Cookie</text>
+  <path d="M460 128 L460 152" stroke="#6b8ca8" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="40" y="152" width="840" height="64" rx="8" fill="#1a2332" stroke="#3d7ea6"/>
+  <text x="60" y="190" fill="#c8d6e5" font-family="Segoe UI, sans-serif" font-size="16">Functional routes · Handlers · Bearer filter · explicit error map</text>
+  <path d="M460 216 L460 240" stroke="#6b8ca8" stroke-width="2"/>
+  <rect x="40" y="240" width="400" height="72" rx="8" fill="#16261c" stroke="#3d8a5a"/>
+  <text x="60" y="272" fill="#c8e6d0" font-family="Segoe UI, sans-serif" font-size="15">Application · Use cases · Ports</text>
+  <text x="60" y="294" fill="#8fb89a" font-family="Segoe UI, sans-serif" font-size="13">RBAC · idempotency · transactions</text>
+  <rect x="480" y="240" width="400" height="72" rx="8" fill="#261a1a" stroke="#8a5a3d"/>
+  <text x="500" y="272" fill="#e6c8c0" font-family="Segoe UI, sans-serif" font-size="15">Pure Domain (JDK only)</text>
+  <text x="500" y="294" fill="#b89a8f" font-family="Segoe UI, sans-serif" font-size="13">Order · Inventory · Audit invariants</text>
+  <path d="M240 312 L240 336" stroke="#6b8ca8" stroke-width="2"/>
+  <rect x="40" y="336" width="400" height="56" rx="8" fill="#1a2332" stroke="#3d7ea6"/>
+  <text x="60" y="370" fill="#c8d6e5" font-family="Segoe UI, sans-serif" font-size="14">Adapters · JDBC · Redis Lua · Security</text>
+  <path d="M240 392 L160 410 M240 392 L320 410" stroke="#6b8ca8" stroke-width="2"/>
+  <text x="80" y="408" fill="#9ec27a" font-family="Segoe UI, sans-serif" font-size="13">MySQL = fact source</text>
+  <text x="250" y="408" fill="#c2a87a" font-family="Segoe UI, sans-serif" font-size="13">Redis = mutex / throttle</text>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#6b8ca8"/>
+    </marker>
+  </defs>
+</svg>

@@ -1,0 +1,13 @@
+target
+.m2
+.npm
+.git
+.idea
+.vscode
+*.log
+README.md
+docs
+concept-rules
+scripts
+frontend/node_modules
+frontend/dist

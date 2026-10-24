@@ -1,0 +1,95 @@
+version: 2
+rules:
+  - id: AR-001
+    concept: pure-domain
+    rule: Domain depends only on the JDK and itself.
+    enforced_by: ArchitectureTest#ar001_domain_is_pure_jdk
+  - id: AR-002
+    concept: ports-and-use-cases
+    rule: Application depends only on the JDK, domain and application code.
+    enforced_by: ArchitectureTest#ar002_application_depends_only_on_domain_and_ports
+  - id: AR-003
+    concept: no-layer-bypass
+    rule: Web adapters cannot access persistence, Redis or transaction adapters.
+    enforced_by: ArchitectureTest#ar003_web_cannot_bypass_application_services
+  - id: AR-004
+    concept: explicit-effects
+    rule: No @Transactional or @Autowired; constructor injection and TransactionRunner are mandatory.
+    enforced_by: ArchitectureTest#ar004_no_implicit_transaction_or_field_injection
+  - id: AR-005
+    concept: composition-root
+    rule: Adapter stereotypes are forbidden; explicit configuration constructs every adapter.
+    enforced_by: ArchitectureTest#ar005_adapters_are_explicitly_wired_not_scanned
+  - id: AR-006
+    concept: no-hidden-effects
+    rule: No implicit @Async, @Scheduled or @Cacheable behavior.
+    enforced_by: ArchitectureTest#ar006_no_hidden_background_or_cache_semantics
+  - id: AR-007
+    concept: acyclic-packages
+    rule: Top-level packages have no dependency cycles.
+    enforced_by: ArchitectureTest#ar007_top_level_packages_have_no_dependency_cycles
+  - id: AR-008
+    concept: deterministic-core
+    rule: Core code has no hidden executors, security context or system-clock reads.
+    enforced_by: ArchitectureTest#ar008_core_has_no_hidden_threads_security_context_or_system_clock
+  - id: AR-009
+    concept: closed-services
+    rule: Application services are final and their fields are private final dependencies.
+    enforced_by: ArchitectureTest#ar009_application_services_are_final_and_have_only_private_final_fields
+  - id: AR-010
+    concept: isolated-adapters
+    rule: Persistence and Redis adapters do not call other infrastructure adapters.
+    enforced_by: ArchitectureTest#ar010_infrastructure_adapters_do_not_call_each_other
+  - id: AR-011
+    concept: stateless-security
+    rule: >
+      Identity is explicit Actor + token (Bearer default, or optional __Host- Cookie delivery).
+      Forbidden: ThreadLocal, Spring SecurityContext, jakarta.servlet.http.Cookie
+      (CookieAuthSupport parses the Cookie header as text instead).
+    enforced_by: ArchitectureTest#ar011_security_is_stateless_and_has_no_threadlocal_or_cookie_identity
+  - id: AR-012
+    concept: explicit-routes
+    rule: HTTP endpoints use RouterFunction, not annotation-discovered duplicate mappings.
+    enforced_by: ArchitectureTest#ar012_http_mappings_remain_explicit_router_functions
+  - id: AR-013
+    concept: append-only-and-secret-safe
+    rule: AuditRepository has no mutation methods and credentials cannot gain a value-exposing toString.
+    enforced_by: ArchitectureTest#ar013_audit_port_is_append_only_and_credentials_have_no_custom_tostring
+
+invariants:
+  - id: INV-001
+    rule: available and reserved are non-negative and their sum never exceeds capacity.
+    enforced_by: MySQL conditional UPDATE/CHECK plus DomainBoundaries and HighPressure concepts
+  - id: INV-002
+    rule: Stock, order/receipt and audit changes commit or roll back together.
+    enforced_by: TransactionRunner, FailureAtomicityConcept and unique-key race IT
+  - id: INV-003
+    rule: Each command namespace maps a request key to one payload and at most one effect.
+    enforced_by: Unique constraints, OrderLifecycle/InventoryCommand/CompositeWorkflow concepts
+  - id: INV-004
+    rule: A lock handle deletes only its own owner token and close is idempotent.
+    enforced_by: release-lock.lua, LuaScriptContractTest and HighConcurrencyIT
+  - id: INV-005
+    rule: Redis lock expiry or absence cannot by itself cause overselling or duplicate orders.
+    enforced_by: Database invariants and no-lock race IT; Redis is not the stock ledger
+  - id: INV-006
+    rule: Reserve moves stock to reserved; cancel releases it; confirm consumes it without refill.
+    enforced_by: DomainBoundaries, OrderLifecycle and CompositeWorkflow concepts
+  - id: INV-007
+    rule: Audit sequences and hash links are independent per aggregate and tampering fails closed.
+    enforced_by: uk_audit_aggregate_sequence, AuditIntegrityConcept and HTTP audit IT
+  - id: INV-008
+    rule: Raw tokens are never persisted; expiry, disabled users and revocation deny authentication.
+    enforced_by: AuthConcept, SchemaContractTest and HTTP authentication IT
+  - id: INV-009
+    rule: Login throttle/reset failure cannot create an unreturned valid token.
+    enforced_by: AuthConcept failure ordering and real Redis Lua HTTP IT
+  - id: INV-010
+    rule: Order pages are bounded keysets with deterministic timestamp/id tie-breaking.
+    enforced_by: OrderQueryConcept, combined indexes and PersistencePerformanceContractTest
+  - id: INV-011
+    rule: Metric labels have bounded cardinality and never contain request/order identifiers.
+    enforced_by: MetricsConcept and HTTP Prometheus contract
+  - id: INV-012
+    rule: Frontend visibility is advisory; every privileged operation is rechecked by Application RBAC.
+    enforced_by: ServiceCapabilityConcept, HTTP RBAC IT and Playwright role scenarios

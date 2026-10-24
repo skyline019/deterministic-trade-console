@@ -1,0 +1,61 @@
+# Redis Sentinel HA overlay (keeps service name "redis" as master so base depends_on stays valid).
+#   docker compose -f docker-compose.yml -f docker-compose.ha.yml up --build -d
+#   ./scripts/ha-failover-drill.sh
+services:
+  redis:
+    # Master (same Compose service name as standalone).
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  redis-replica:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--replicaof", "redis", "6379"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  redis-sentinel:
+    image: redis:7.4-alpine
+    # Sentinel rewrites its conf; copy from a read-only mount into /tmp first.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "cp /etc/redis/sentinel.conf.template /tmp/sentinel.conf && redis-sentinel /tmp/sentinel.conf"
+    volumes:
+      - ./ops/redis/sentinel.conf:/etc/redis/sentinel.conf.template:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      redis-replica:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+
+  app:
+    environment:
+      # Sentinel takes precedence for Lettuce; keep REDIS_HOST/PORT typed for Boot binding.
+      SPRING_DATA_REDIS_SENTINEL_MASTER: mymaster
+      SPRING_DATA_REDIS_SENTINEL_NODES: redis-sentinel:26379
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redis-sentinel:
+        condition: service_healthy

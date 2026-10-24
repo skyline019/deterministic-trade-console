@@ -1,0 +1,29 @@
+{
+  "name": "deterministic-trade-console",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:demo": "vite --mode demo",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "vitest run",
+    "test:e2e": "node ./scripts/warn-demo-e2e.mjs && playwright test",
+    "test:e2e:demo": "playwright test",
+    "test:e2e:same-origin": "playwright test -c playwright.same-origin.config.ts",
+    "test:e2e:https-cookie": "playwright test -c playwright.https-cookie.config.ts"
+  },
+  "dependencies": {
+    "vue": "3.5.13"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.51.1",
+    "@types/node": "^20.17.10",
+    "@vitejs/plugin-vue": "5.2.1",
+    "typescript": "5.7.2",
+    "vite": "^6.3.5",
+    "vitest": "^3.0.5",
+    "vue-tsc": "2.2.0"
+  }
+}
