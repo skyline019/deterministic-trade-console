@@ -28,6 +28,7 @@ import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.core.Ordered;
 import org.springframework.core.env.Environment;
 import org.springframework.core.io.ClassPathResource;
@@ -125,7 +126,12 @@ public class SecurityConfiguration {
         return registration;
     }
 
+    /**
+     * Primary for {@link AccessTokenAuthenticator}: AuthService is also that type (opaque path),
+     * but HTTP filters must use the composite (opaque + optional JWT).
+     */
     @Bean
+    @Primary
     AccessTokenAuthenticator accessTokenAuthenticator(AuthService auth, SecuritySettings settings,
                                                       ObjectMapper json, Clock clock) {
         Optional<AccessTokenAuthenticator> jwt = Optional.empty();
