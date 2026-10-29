@@ -1,5 +1,6 @@
 package com.acme.trade.adapter.ops;
 
+import com.acme.trade.application.result.SweepReport;
 import com.acme.trade.application.service.MaintenanceService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,23 +45,36 @@ public final class MaintenanceRunner implements ApplicationRunner {
         if (command.isEmpty()) {
             return;
         }
-        int affected = switch (command) {
-            case "purge-tokens", "purge-expired-tokens" -> maintenance.purgeExpiredTokens(batchSize);
+        String summary = switch (command) {
+            case "purge-tokens", "purge-expired-tokens" ->
+                    "affected=" + maintenance.purgeExpiredTokens(batchSize);
             case "archive-audit", "archive-quiet-audits" ->
-                    maintenance.archiveQuietAudits(auditQuietBefore, batchSize);
+                    "affected=" + maintenance.archiveQuietAudits(auditQuietBefore, batchSize);
             case "checkpoint-audit", "checkpoint-long-chains" ->
-                    maintenance.checkpointLongChains(checkpointMinEvents, batchSize);
+                    summarize(maintenance.checkpointLongChains(checkpointMinEvents, batchSize));
             case "expire-reservations", "expire-reserved-orders" ->
-                    maintenance.expireReservations(batchSize);
+                    summarize(maintenance.expireReservations(batchSize));
             default -> throw new IllegalArgumentException(
                     "unknown trade.maintenance.command='" + command
                             + "' (expected purge-tokens|archive-audit|checkpoint-audit|expire-reservations)");
         };
-        log.info("Maintenance command '{}' finished; affected={}", command, affected);
-        System.out.println("MAINTENANCE_OK command=" + command + " affected=" + affected);
+        log.info("Maintenance command '{}' finished; {}", command, summary);
+        System.out.println("MAINTENANCE_OK command=" + command + " " + summary);
         if (exitAfter) {
             int code = SpringApplication.exit(context, () -> 0);
             System.exit(code);
         }
+    }
+
+    /**
+     * Sweeps report per-item failures instead of aborting, so the command line, the log line and the
+     * exit code agree: the batch is reported as partially applied, never as a silent success.
+     */
+    private static String summarize(SweepReport report) {
+        for (String failure : report.failures()) {
+            log.warn("Maintenance item failed: {}", failure);
+        }
+        return "affected=" + report.applied() + " attempted=" + report.attempted()
+                + " failed=" + report.failed();
     }
 }

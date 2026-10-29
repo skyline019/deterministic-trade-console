@@ -15,7 +15,7 @@ type ViewKey = 'overview' | 'inventory' | 'orders' | 'audit' | 'rules'
 type ToastTone = 'success' | 'error' | 'info'
 interface Toast { id: number; message: string; tone: ToastTone }
 
-const { session, actor, canAudit, logout, expire } = useSession()
+const { session, actor, canAudit, logout, expire, revalidateSession } = useSession()
 const activeView = ref<ViewKey>('overview')
 const auditSeed = ref('')
 const mobileOpen = ref(false)
@@ -63,7 +63,11 @@ function onSessionExpired(): void {
   notify('会话已失效，请重新登录', 'error')
 }
 
-onMounted(() => window.addEventListener('trade:session-expired', onSessionExpired))
+onMounted(() => {
+  window.addEventListener('trade:session-expired', onSessionExpired)
+  // Cookie sessions hold no token: prove the HttpOnly cookie is still valid before trusting the UI.
+  void revalidateSession()
+})
 onUnmounted(() => window.removeEventListener('trade:session-expired', onSessionExpired))
 </script>
 

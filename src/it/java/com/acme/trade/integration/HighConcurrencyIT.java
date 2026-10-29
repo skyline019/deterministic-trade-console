@@ -1,13 +1,13 @@
 package com.acme.trade.integration;
 
 import com.acme.trade.adapter.persistence.MySqlAuditRepository;
+import com.acme.trade.adapter.persistence.MySqlMaintenanceStore;
 import com.acme.trade.adapter.persistence.MySqlInventoryRepository;
 import com.acme.trade.adapter.persistence.MySqlOrderRepository;
 import com.acme.trade.adapter.redis.RedisLockManager;
 import com.acme.trade.adapter.transaction.SpringTransactionRunner;
 import com.acme.trade.application.command.PlaceOrderCommand;
 import com.acme.trade.application.exception.InsufficientStockException;
-import com.acme.trade.application.port.AuditRecorder;
 import com.acme.trade.application.port.InventoryRepository;
 import com.acme.trade.application.port.LockManager;
 import com.acme.trade.application.port.OrderRepository;
@@ -16,6 +16,10 @@ import com.acme.trade.application.result.PlaceOrderResult;
 import com.acme.trade.application.query.OrderPageQuery;
 import com.acme.trade.application.service.AuditService;
 import com.acme.trade.application.service.PlaceOrderService;
+import com.acme.trade.domain.audit.AggregateRef;
+import com.acme.trade.domain.audit.AggregateType;
+import com.acme.trade.domain.audit.AuditChainVerifier;
+import com.acme.trade.domain.audit.AuditEvent;
 import com.acme.trade.domain.model.Order;
 import com.acme.trade.domain.model.OrderId;
 import com.acme.trade.domain.model.OrderStatus;
@@ -27,6 +31,7 @@ import com.acme.trade.domain.security.Role;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
@@ -34,17 +39,17 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.jdbc.datasource.init.ScriptUtils;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
-import java.sql.Connection;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -73,9 +78,11 @@ class HighConcurrencyIT {
     private static InventoryRepository inventory;
     private static OrderRepository orders;
     private static TransactionRunner transactions;
+    private static DataSourceTransactionManager transactionManager;
     private static RedisLockManager lockManager;
     private static PlaceOrderService service;
-    private static AuditRecorder audit;
+    private static AuditService audit;
+    private static MySqlAuditRepository auditRepository;
 
     @BeforeAll
     static void startInfrastructure() throws Exception {
@@ -90,20 +97,26 @@ class HighConcurrencyIT {
                 + "&connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true";
         DriverManagerDataSource dataSource = new DriverManagerDataSource(url, mysql.getUsername(), mysql.getPassword());
         jdbc = new JdbcTemplate(dataSource);
-        try (Connection connection = dataSource.getConnection()) {
-            ScriptUtils.executeSqlScript(connection, new ClassPathResource("schema.sql"));
-        }
+        // Apply the real migrations (not a mirrored schema.sql) so V2..Vn are exercised by this IT.
+        Flyway.configure()
+                .dataSource(url, mysql.getUsername(), mysql.getPassword())
+                .locations("classpath:db/migration")
+                .baselineOnMigrate(false)
+                .load()
+                .migrate();
 
         redisConnections = new LettuceConnectionFactory(redis.getHost(), redis.getFirstMappedPort());
         redisConnections.afterPropertiesSet();
         redisTemplate = new StringRedisTemplate(redisConnections);
         inventory = new MySqlInventoryRepository(jdbc);
         orders = new MySqlOrderRepository(jdbc);
-        transactions = new SpringTransactionRunner(new DataSourceTransactionManager(dataSource), 5);
+        transactionManager = new DataSourceTransactionManager(dataSource);
+        transactions = new SpringTransactionRunner(transactionManager, 5);
         lockManager = new RedisLockManager(redisTemplate,
                 new ClassPathResource("redis/acquire-lock.lua"),
                 new ClassPathResource("redis/release-lock.lua"));
-        audit = new AuditService(new MySqlAuditRepository(jdbc), UUID::randomUUID, Clock.systemUTC(), transactions);
+        auditRepository = new MySqlAuditRepository(jdbc);
+        audit = new AuditService(auditRepository, UUID::randomUUID, Clock.systemUTC(), transactions);
         service = new PlaceOrderService(inventory, orders, lockManager, transactions,
                 OrderId::random, Clock.systemUTC(), LOCK_TTL, java.time.Duration.ofHours(1), audit);
     }
@@ -124,6 +137,8 @@ class HighConcurrencyIT {
     @BeforeEach
     void cleanState() {
         jdbc.update("DELETE FROM audit_events");
+        jdbc.update("DELETE FROM audit_events_archive");
+        jdbc.update("DELETE FROM order_reschedule_operations");
         jdbc.update("DELETE FROM order_operations");
         jdbc.update("DELETE FROM inventory_operations");
         jdbc.update("DELETE FROM orders");
@@ -259,6 +274,39 @@ class HighConcurrencyIT {
 
         assertThat(redisTemplate.opsForValue().get(key)).isEqualTo("a-different-owner");
         redisTemplate.delete(key);
+    }
+
+    /**
+     * Archive must relocate a chain, not truncate its history: reads span both tables, the sequence
+     * continues after an archive-cut tip, and verification still covers the archived prefix.
+     */
+    @Test
+    void archiving_a_chain_preserves_sequence_and_verifiability() {
+        AggregateRef aggregate = AggregateRef.of(AggregateType.ORDER, UUID.randomUUID().toString());
+        audit.record(ACTOR, "ORDER_PLACED", aggregate, new RequestId("archive-seed-1"), Map.of("step", "1"));
+        audit.record(ACTOR, "ORDER_CONFIRMED", aggregate, new RequestId("archive-seed-2"), Map.of("step", "2"));
+
+        MySqlMaintenanceStore maintenance = new MySqlMaintenanceStore(jdbc, new TransactionTemplate(transactionManager));
+        int archived = maintenance.archiveQuietAggregates(
+                Instant.now().plusSeconds(3600), Instant.now(), 10);
+        assertThat(archived).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM audit_events", Long.class)).isEqualTo(0L);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM audit_events_archive", Long.class)).isEqualTo(2L);
+
+        List<AuditEvent> relocated = auditRepository.findChain(aggregate);
+        assertThat(relocated).hasSize(2);
+        assertThat(auditRepository.findLast(aggregate).orElseThrow().sequence()).isEqualTo(2L);
+        assertThat(AuditChainVerifier.verify(relocated).valid()).isTrue();
+
+        audit.record(ACTOR, "ORDER_CANCELLED", aggregate, new RequestId("archive-seed-3"), Map.of("step", "3"));
+        List<AuditEvent> grown = auditRepository.findChain(aggregate);
+        assertThat(grown).hasSize(3);
+        assertThat(grown.get(2).sequence()).isEqualTo(3L);
+        assertThat(grown.get(2).previousHash()).isEqualTo(grown.get(1).eventHash());
+
+        var verification = audit.verify(ACTOR, aggregate);
+        assertThat(verification.valid()).isTrue();
+        assertThat(verification.checkedEvents()).isEqualTo(3);
     }
 
     private record BarrierOrderRepository(OrderRepository delegate, CyclicBarrier barrier) implements OrderRepository {

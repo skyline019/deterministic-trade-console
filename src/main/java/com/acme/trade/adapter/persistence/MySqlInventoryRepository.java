@@ -96,13 +96,28 @@ public final class MySqlInventoryRepository implements InventoryRepository {
                 quantity.value(), Timestamp.from(at), sku.value(), quantity.value()) == 1;
     }
 
+    /**
+     * Test/bootstrap seeding only (see the port contract). Fails closed when the row carries live
+     * reservations, because zeroing {@code reserved_quantity} would break the dual-ledger invariant
+     * that the order rows are still asserting.
+     */
     @Override
     public void replaceStock(Sku sku, StockLevel stock, Instant at) {
-        jdbc.update("""
+        int replaced = jdbc.update("""
+                        UPDATE inventory SET available_quantity = ?, version = version + 1, updated_at = ?
+                        WHERE sku = ? AND reserved_quantity = 0
+                        """, stock.value(), Timestamp.from(at), sku.value());
+        if (replaced == 1) {
+            return;
+        }
+        int created = jdbc.update("""
                         INSERT INTO inventory(sku, available_quantity, reserved_quantity, version, updated_at)
                         VALUES (?, ?, 0, 0, ?)
-                        ON DUPLICATE KEY UPDATE available_quantity = VALUES(available_quantity),
-                            reserved_quantity = 0, version = version + 1, updated_at = VALUES(updated_at)
+                        ON DUPLICATE KEY UPDATE version = version
                         """, sku.value(), stock.value(), Timestamp.from(at));
+        if (created == 0) {
+            throw new IllegalStateException("refusing to replace stock for " + sku.value()
+                    + ": reserved_quantity is not zero");
+        }
     }
 }

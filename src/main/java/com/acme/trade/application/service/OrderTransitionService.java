@@ -167,12 +167,18 @@ public final class OrderTransitionService {
         if (current.status() != OrderStatus.RESERVED) {
             throw new OrderStateConflictException("order is already " + current.status());
         }
+        Instant now = clock.instant();
+        // The deadline is a hard boundary, not an advisory hint for the sweep: accepting an expired
+        // reservation would make the outcome depend on whether the operator sweep has run yet.
+        if (current.isExpiredAt(now)) {
+            throw new OrderStateConflictException(
+                    "reservation expired at " + current.expiresAt() + "; cancel it or place a new order");
+        }
         int effect = confirmQuantity == null ? current.quantity().value() : confirmQuantity.value();
         if (effect <= 0 || effect > current.quantity().value()) {
             throw new ValidationException("confirm quantity must be between 1 and remaining reserved quantity");
         }
 
-        Instant now = clock.instant();
         Quantity units = new Quantity(effect);
         Order next = current.confirmUnits(units, now);
 

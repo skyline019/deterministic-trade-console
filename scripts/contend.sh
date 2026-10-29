@@ -29,10 +29,16 @@ seq 1 100 | xargs -P 16 -I '{}' sh -c '
         -d "{\"sku\":\"$SKU\",\"quantity\":1}" > "$TMP_DIR/$1"
 ' _ '{}'
 
-created=$(grep -h '^201$' "$TMP_DIR"/* | wc -l)
-out_of_stock=$(grep -h '^409$' "$TMP_DIR"/* | wc -l)
-[ "$created" -eq 50 ]
-[ "$out_of_stock" -eq 50 ]
+created=$(grep -h '^201$' "$TMP_DIR"/[0-9]* | wc -l | tr -d ' ')
+out_of_stock=$(grep -h '^409$' "$TMP_DIR"/[0-9]* | wc -l | tr -d ' ')
+if [ "$created" -ne 50 ] || [ "$out_of_stock" -ne 50 ]; then
+    printf 'CONTENTION FAILED: expected 50x201 + 50x409, got created=%s out_of_stock=%s\n' \
+        "$created" "$out_of_stock" >&2
+    printf 'status histogram: %s\n' "$(cat "$TMP_DIR"/[0-9]* 2>/dev/null | sort | uniq -c | tr '\n' ' ')" >&2
+    printf 'hint: 429 = API rate limit (API_ATTEMPT_LIMIT/API_WINDOW), 503 = lock/Redis/DB unavailable,\n' >&2
+    printf '      000 = curl transport error, empty = request never completed\n' >&2
+    exit 1
+fi
 
 curl -fsS -H "$AUTH" "$BASE_URL/api/v1/inventory/$SKU" > "$TMP_DIR/inventory"
 grep -q '"available":0' "$TMP_DIR/inventory"

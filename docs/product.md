@@ -40,6 +40,7 @@
 ## 架构约束
 
 - 过期释放 = 取消语义（`CANCELLED` + `releaseReservation`），独立幂等键 `expire-{orderId}`。  
+- 截止时刻是硬边界：`expires_at <= now` 时确认与改期都拒绝（`ORDER_STATE_CONFLICT` / 校验失败），只有取消/过期释放能释放台账，结果不依赖 sweep 是否已运行（INV-013）。  
 - 部分确认：同订单行缩量，不拆单；`order_operations.effect_quantity` 进入幂等指纹（ADR 002）。  
 - 改期：独立 `order_reschedule_operations`；条件更新绑定旧 `expires_at`（ADR 003）。  
 - JWT 只做 AuthN → `Actor`（HS256 或静态 JWKS/RS256）；RBAC 仍在 Application。  

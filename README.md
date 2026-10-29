@@ -90,8 +90,13 @@ cd frontend && npm ci && npm run dev
 | Vue unit + build | `cd frontend && npm ci && npm test && npm run build` | Contracts |
 | Browser E2E (Demo) | `npm run test:e2e:demo` | UI flows — **not** same-origin proof |
 | Black-box | `./scripts/smoke.sh`, `contend.sh` | Running Compose stack |
+| Maintenance drill | `./scripts/ci-maintenance-check.sh` | Archive relocation, expiry sweep, V6 index |
+| Same-origin / cookie E2E | `npm run test:e2e:same-origin`, `test:e2e:https-cookie` | Boot-served UI, `__Host-` cookie + CSRF |
 
-CI on `main` runs ArchUnit+jtest, Vue unit+build+Demo E2E, and MySQL/Redis integration ([workflow](.github/workflows/ci.yml)).
+CI runs all five layers ([workflow](.github/workflows/ci.yml)): `architecture-and-core`, `vue-console`,
+`mysql-redis-concurrency` (Testcontainers: migrations, archive relocation, contention) and
+`compose-stack` (image build, Compose smoke + contention + maintenance drill, same-origin and
+cookie E2E over Caddy TLS).
 
 Dated local runs: [docs/verification.md](docs/verification.md).
 

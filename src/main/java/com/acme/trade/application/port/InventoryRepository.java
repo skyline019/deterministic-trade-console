@@ -25,6 +25,9 @@ public interface InventoryRepository {
 
     boolean confirmReservation(Sku sku, Quantity quantity, Instant at);
 
-    /** Test/bootstrap support; production mutations use create/adjust with command receipts. */
+    /**
+     * Test/bootstrap support only; production mutations use create/adjust with command receipts.
+     * Implementations must fail closed when the SKU still holds reservations.
+     */
     void replaceStock(Sku sku, StockLevel stock, Instant at);
 }

@@ -23,7 +23,9 @@ ARG ALL_PROXY
 ARG NO_PROXY
 ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} ALL_PROXY=${ALL_PROXY} NO_PROXY=${NO_PROXY} \
     http_proxy=${HTTP_PROXY} https_proxy=${HTTPS_PROXY} all_proxy=${ALL_PROXY} no_proxy=${NO_PROXY}
-COPY ops/maven/settings.xml /root/.m2/settings.xml
+# ops/maven/settings.xml mirrors Central to a regional endpoint; CI runners use plain Central.
+ARG MAVEN_SETTINGS=ops/maven/settings.xml
+COPY ${MAVEN_SETTINGS} /root/.m2/settings.xml
 COPY pom.xml ./
 COPY src ./src
 COPY --from=frontend-build /frontend/dist ./src/main/resources/static
