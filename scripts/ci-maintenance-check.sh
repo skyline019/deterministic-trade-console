@@ -240,5 +240,9 @@ assert_ledger 5 0
 
 curl -sS -o /dev/null -X DELETE -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/v1/auth/token" || true
 TOKEN=''
-printf '\nMAINTENANCE CHECK OK: archive_rows=%s archived_order_b=%s expired=%s degraded=%s repaired=%s\n' \
-    "$archive_rows" "$order_b_archived" "$expired_summary" "${degraded:-0}" "${repaired:-0}"
+summary=$(printf 'archive_rows=%s archived_order_b=%s expired=%s degraded=%s repaired=%s' \
+    "$archive_rows" "$order_b_archived" "$expired_summary" "${degraded:-0}" "${repaired:-0}")
+printf '\nMAINTENANCE CHECK OK: %s\n' "$summary"
+# ::notice:: surfaces the drill's outcome as a check annotation: raw job logs are often unreachable
+# from outside CI, and "the drill passed" should not require downloading a log to confirm.
+printf '::notice title=maintenance drill::MAINTENANCE CHECK OK %s\n' "$summary"
