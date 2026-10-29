@@ -8,6 +8,7 @@ import com.acme.trade.adapter.redis.RedisLockManager;
 import com.acme.trade.adapter.transaction.SpringTransactionRunner;
 import com.acme.trade.application.command.PlaceOrderCommand;
 import com.acme.trade.application.exception.InsufficientStockException;
+import com.acme.trade.application.port.ExpiredReservationScan;
 import com.acme.trade.application.port.InventoryRepository;
 import com.acme.trade.application.port.LockManager;
 import com.acme.trade.application.port.OrderRepository;
@@ -334,7 +335,7 @@ class HighConcurrencyIT {
         }
 
         @Override
-        public List<Order> findExpiredReserved(Instant now, int limit) {
+        public ExpiredReservationScan findExpiredReserved(Instant now, int limit) {
             return delegate.findExpiredReserved(now, limit);
         }
 

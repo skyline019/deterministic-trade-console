@@ -1,5 +1,6 @@
 package com.acme.trade.application.service;
 
+import com.acme.trade.application.port.ExpiredReservationScan;
 import com.acme.trade.application.port.MaintenanceStore;
 import com.acme.trade.application.port.OrderRepository;
 import com.acme.trade.application.result.SweepReport;
@@ -91,14 +92,16 @@ public final class MaintenanceService {
      * <p>Per-order isolation is deliberate: an order confirmed or cancelled between
      * {@code findExpiredReserved} and the transition is an expected race, and must not keep the rest of
      * the batch reserved. Failures are reported, not thrown, so a cron job keeps making progress.
+     * Rows the scan could not materialise are reported the same way — a corrupt row must not keep every
+     * other reservation alive.
      */
     public SweepReport expireReservations(int batchSize) {
         requireBatch(batchSize);
         Instant now = clock.instant();
-        List<Order> expired = orders.findExpiredReserved(now, batchSize);
-        List<String> failures = new ArrayList<>();
+        ExpiredReservationScan scan = orders.findExpiredReserved(now, batchSize);
+        List<String> failures = new ArrayList<>(scan.unreadable());
         int affected = 0;
-        for (Order order : expired) {
+        for (Order order : scan.orders()) {
             RequestId requestId = new RequestId("expire-" + order.id());
             try {
                 transitions.transition(EXPIRY_ACTOR, requestId, order.id(), OrderStatus.CANCELLED, EXPIRE_REASON);
@@ -107,7 +110,7 @@ public final class MaintenanceService {
                 failures.add(order.id() + ": " + describe(failure));
             }
         }
-        return new SweepReport(expired.size(), affected, failures);
+        return new SweepReport(scan.selected(), affected, failures);
     }
 
     /** Bounded, payload-free description: exception type only (no SQL, tokens or request bodies). */

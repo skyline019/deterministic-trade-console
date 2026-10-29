@@ -107,6 +107,7 @@ Dated local runs: [docs/verification.md](docs/verification.md).
 | [product.md](docs/product.md) | Product scope |
 | [consistency.md](docs/consistency.md) | Guarantees & failure matrix |
 | [architecture.md](docs/architecture.md) | Hexagon & wiring |
+| [api.md](docs/api.md) | HTTP 契约：认证、幂等、游标、错误码 |
 | [PORTFOLIO.md](docs/PORTFOLIO.md) | Interview talking points |
 | [ADR 001](docs/adr/001-idp-and-multi-active.md) · [002](docs/adr/002-partial-confirm.md) · [003](docs/adr/003-reservation-reschedule.md) | Decisions |
 

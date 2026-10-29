@@ -3,6 +3,7 @@ package concept;
 import com.acme.trade.application.command.PlaceOrderCommand;
 import com.acme.trade.application.exception.DuplicateRequestException;
 import com.acme.trade.application.exception.StockAdjustmentRejectedException;
+import com.acme.trade.application.port.ExpiredReservationScan;
 import com.acme.trade.application.port.LockManager;
 import com.acme.trade.application.port.OrderRepository;
 import com.acme.trade.application.query.OrderPageQuery;
@@ -138,7 +139,7 @@ public final class FailureAtomicityConcept implements Concept {
                 }
 
                 @Override
-                public List<Order> findExpiredReserved(Instant now, int limit) {
+                public ExpiredReservationScan findExpiredReserved(Instant now, int limit) {
                     return fixture.orders.findExpiredReserved(now, limit);
                 }
 

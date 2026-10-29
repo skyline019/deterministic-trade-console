@@ -41,9 +41,9 @@ class MigrationIT {
 
             assertThat(result.migrationsExecuted)
                     .as("every migration in db/migration must be applied on a clean database")
-                    .isGreaterThanOrEqualTo(6);
+                    .isGreaterThanOrEqualTo(7);
             assertThat(migratedVersions(mysql))
-                    .containsSubsequence("1", "2", "3", "4", "5", "6");
+                    .containsSubsequence("1", "2", "3", "4", "5", "6", "7");
 
             assertThat(columnExists(mysql, "orders", "expires_at"))
                     .as("V3 adds the reservation deadline (INV-013 depends on it)")
@@ -63,12 +63,72 @@ class MigrationIT {
             assertThat(indexExists(mysql, "orders", "idx_orders_expire_reserved"))
                     .as("V3 adds the expiry sweep index")
                     .isTrue();
+            assertThat(checkConstraintExists(mysql, "orders", "chk_orders_updated_after_created"))
+                    .as("V7 makes a non-monotonic row unwritable instead of merely unreadable")
+                    .isTrue();
+            assertThat(checkConstraintExists(mysql, "orders", "chk_orders_reserved_expiry"))
+                    .as("V7 rejects a reservation that expires before it was created")
+                    .isTrue();
 
             // Re-running must be a no-op: migrations are forward-only and never re-applied.
             assertThat(flyway(mysql, false).migrate().migrationsExecuted)
                     .as("a second migrate must not execute anything")
                     .isZero();
         }
+    }
+
+    /**
+     * The domain refuses to materialise these rows, so a stored one becomes a 500 (STORED_STATE_INVALID) on
+     * read and an unreadable report on the expiry sweep. V7 moves the check to the writer: the same values
+     * that the constructor rejects must now fail the INSERT.
+     */
+    @Test
+    void v7_rejects_the_rows_the_domain_would_refuse_to_materialise() throws Exception {
+        try (MySQLContainer<?> mysql = newContainer("trade")) {
+            mysql.start();
+            flyway(mysql, false).migrate();
+
+            try (Connection connection = connection(mysql); Statement statement = connection.createStatement()) {
+                statement.execute("INSERT INTO inventory(sku, available_quantity, reserved_quantity, version, updated_at)"
+                        + " VALUES ('SKU-V7', 10, 0, 0, NOW(6))");
+
+                assertThatThrownBy(() -> statement.execute(orderInsert(
+                        "v7-expiry-before-created", "RESERVED",
+                        "NOW(6), NOW(6), NOW(6) - INTERVAL 1 MINUTE")))
+                        .as("a RESERVED order expiring before it was created must never reach the table")
+                        .isInstanceOf(SQLException.class)
+                        .hasMessageContaining("chk_orders_reserved_expiry");
+
+                assertThatThrownBy(() -> statement.execute(orderInsert(
+                        "v7-null-expiry", "RESERVED", "NOW(6), NOW(6), NULL")))
+                        .as("a RESERVED order without a deadline must never reach the table")
+                        .isInstanceOf(SQLException.class)
+                        .hasMessageContaining("chk_orders_reserved_expiry");
+
+                assertThatThrownBy(() -> statement.execute(orderInsert(
+                        "v7-updated-before-created", "CANCELLED",
+                        "NOW(6), NOW(6) - INTERVAL 1 MINUTE, NULL")))
+                        .as("updated_at < created_at must never reach the table")
+                        .isInstanceOf(SQLException.class)
+                        .hasMessageContaining("chk_orders_updated_after_created");
+
+                // The constraints bound corruption, not normal writes: a healthy reservation still inserts,
+                // and a terminal order legitimately drops its deadline.
+                statement.execute(orderInsert("v7-valid-reserved", "RESERVED",
+                        "NOW(6), NOW(6), NOW(6) + INTERVAL 1 HOUR"));
+                statement.execute(orderInsert("v7-valid-cancelled", "CANCELLED", "NOW(6), NOW(6), NULL"));
+                assertThat(count(mysql, "SELECT COUNT(*) FROM orders WHERE request_id IN (?, ?)",
+                        "v7-valid-reserved", "v7-valid-cancelled"))
+                        .as("V7 must not reject rows the domain accepts")
+                        .isEqualTo(2);
+            }
+        }
+    }
+
+    private static String orderInsert(String requestId, String status, String timestamps) {
+        return "INSERT INTO orders(id, request_id, sku, quantity, fingerprint, status, created_at, updated_at,"
+                + " expires_at, version) VALUES (UUID(), '" + requestId + "', 'SKU-V7', 1, REPEAT('a', 64), '"
+                + status + "', " + timestamps + ", 0)";
     }
 
     @Test
@@ -185,6 +245,13 @@ class MigrationIT {
     private static boolean columnExists(MySQLContainer<?> mysql, String table, String column) throws SQLException {
         return count(mysql, "SELECT COUNT(*) FROM information_schema.columns "
                 + "WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?", table, column) > 0;
+    }
+
+    private static boolean checkConstraintExists(MySQLContainer<?> mysql, String table, String constraint)
+            throws SQLException {
+        return count(mysql, "SELECT COUNT(*) FROM information_schema.table_constraints "
+                + "WHERE table_schema = DATABASE() AND table_name = ? AND constraint_name = ? "
+                + "AND constraint_type = 'CHECK'", table, constraint) > 0;
     }
 
     private static boolean indexExists(MySQLContainer<?> mysql, String table, String index) throws SQLException {

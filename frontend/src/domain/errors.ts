@@ -17,6 +17,7 @@ const CODE_MESSAGES: Record<string, string> = {
   NOT_FOUND: '目标资源不存在',
   LOCK_UNAVAILABLE: '互斥锁暂时不可用，请稍后重试',
   PERSISTENCE_UNAVAILABLE: '数据库暂时不可用，请稍后重试',
+  STORED_STATE_INVALID: '服务端存储的订单数据不一致，请联系运维处理',
   AUTH_UNAVAILABLE: '认证服务暂时不可用，请稍后重试',
   INTERNAL_ERROR: '服务内部错误',
   INVALID_RESPONSE: '服务返回了无效响应',

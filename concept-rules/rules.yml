@@ -111,4 +111,10 @@ invariants:
       SweepReport and the batch continues, so a one-shot job keeps making progress and never reports
       a silent partial success.
     enforced_by: SweepReport, MaintenanceService per-item isolation, ReservationExpiryConcept#one_racing_order_does_not_abort_the_sweep
+  - id: INV-016
+    rule: >
+      A stored row that no longer satisfies a domain invariant is server-side broken state, not a bad
+      request: reads answer 500 STORED_STATE_INVALID, the expiry sweep reports the row and keeps going,
+      and V7 CHECK constraints keep such rows from being written in the first place.
+    enforced_by: MySqlOrderRepository#mapRow wrapping StoredStateInvalidException, ExpiredReservationScan, V7__order_timestamp_invariants.sql, ApiErrorHandlerTest, ReservationExpiryConcept#an_unreadable_row_is_reported_without_wedging_the_sweep
 

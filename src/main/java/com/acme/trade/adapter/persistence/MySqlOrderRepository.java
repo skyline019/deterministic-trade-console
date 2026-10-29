@@ -1,6 +1,8 @@
 package com.acme.trade.adapter.persistence;
 
 import com.acme.trade.application.exception.DuplicateRequestException;
+import com.acme.trade.application.exception.StoredStateInvalidException;
+import com.acme.trade.application.port.ExpiredReservationScan;
 import com.acme.trade.application.port.OrderRepository;
 import com.acme.trade.application.query.OrderPageQuery;
 import com.acme.trade.domain.model.Order;
@@ -12,8 +14,11 @@ import com.acme.trade.domain.model.RequestId;
 import com.acme.trade.domain.model.Sku;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -24,16 +29,30 @@ import java.util.Optional;
 public final class MySqlOrderRepository implements OrderRepository {
     private static final String COLUMNS =
             "id, request_id, sku, quantity, fingerprint, status, created_at, updated_at, expires_at, version";
-    private static final RowMapper<Order> ROW_MAPPER = (rs, rowNum) -> {
-        Timestamp expires = rs.getTimestamp("expires_at");
-        return new Order(
-                OrderId.of(rs.getString("id")), new RequestId(rs.getString("request_id")), Sku.of(rs.getString("sku")),
-                new Quantity(rs.getInt("quantity")), new OrderFingerprint(rs.getString("fingerprint")),
-                OrderStatus.valueOf(rs.getString("status")), rs.getTimestamp("created_at").toInstant(),
-                rs.getTimestamp("updated_at").toInstant(),
-                expires == null ? null : expires.toInstant(),
-                rs.getLong("version"));
-    };
+    private static final RowMapper<Order> ROW_MAPPER = (rs, rowNum) -> mapRow(rs);
+
+    /**
+     * Materialises a row through the domain constructor, which re-validates every invariant.
+     * A stored row that fails those checks is a server-side data defect, not a bad request, so it
+     * surfaces as {@link StoredStateInvalidException} (500) instead of a raw domain validation error
+     * (400). The order id is included; the payload is not.
+     */
+    private static Order mapRow(ResultSet rs) throws SQLException {
+        String id = rs.getString("id");
+        try {
+            Timestamp expires = rs.getTimestamp("expires_at");
+            return new Order(
+                    OrderId.of(id), new RequestId(rs.getString("request_id")), Sku.of(rs.getString("sku")),
+                    new Quantity(rs.getInt("quantity")), new OrderFingerprint(rs.getString("fingerprint")),
+                    OrderStatus.valueOf(rs.getString("status")), rs.getTimestamp("created_at").toInstant(),
+                    rs.getTimestamp("updated_at").toInstant(),
+                    expires == null ? null : expires.toInstant(),
+                    rs.getLong("version"));
+        } catch (RuntimeException invalid) {
+            throw new StoredStateInvalidException(
+                    "stored order " + id + " violates a domain invariant: " + invalid.getMessage(), invalid);
+        }
+    }
 
     private final JdbcTemplate jdbc;
 
@@ -77,15 +96,31 @@ public final class MySqlOrderRepository implements OrderRepository {
         return jdbc.query(sql.toString(), ROW_MAPPER, arguments.toArray());
     }
 
+    /**
+     * Tolerant scan: an unmappable row is collected and the sweep continues. Rows are still bounded by
+     * the SQL LIMIT, so a permanently corrupt row cannot starve the batch beyond its slot.
+     */
     @Override
-    public List<Order> findExpiredReserved(Instant now, int limit) {
-        return jdbc.query("""
+    public ExpiredReservationScan findExpiredReserved(Instant now, int limit) {
+        List<Order> readable = new ArrayList<>();
+        List<String> unreadable = new ArrayList<>();
+        jdbc.query("""
                 SELECT %s FROM orders
                 WHERE status = 'RESERVED' AND expires_at IS NOT NULL AND expires_at <= ?
                 ORDER BY expires_at ASC, id ASC
                 LIMIT ?
                 """.formatted(COLUMNS),
-                ROW_MAPPER, Timestamp.from(now), limit);
+                (RowCallbackHandler) rs -> {
+                    try {
+                        readable.add(mapRow(rs));
+                    } catch (SQLException failure) {
+                        unreadable.add("unreadable row: " + failure.getMessage());
+                    } catch (StoredStateInvalidException invalid) {
+                        unreadable.add(invalid.getMessage());
+                    }
+                },
+                Timestamp.from(now), limit);
+        return new ExpiredReservationScan(readable, unreadable);
     }
 
     @Override

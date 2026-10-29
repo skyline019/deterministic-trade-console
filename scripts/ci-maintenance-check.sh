@@ -7,7 +7,9 @@ set -eu
 #      audit_events + audit_events_archive, so a post-archive append continues at the archived tip
 #      and verification still reports the archived prefix instead of "no events".
 #   2. expire-reservations cancels through the same ledger as a manual cancel and releases stock.
-#   3. the V6 archive-eligibility index actually ships with the migrations.
+#   3. the V6 archive-eligibility index and the V7 timestamp invariants actually ship with the migrations.
+#   4. a row that violates a domain invariant is reported by the expiry sweep (not fatal to the batch) and
+#      surfaces as 500 STORED_STATE_INVALID on read, while the same write is rejected while V7 is enforced.
 #
 # Usage: ./scripts/ci-maintenance-check.sh [BASE_URL]
 BASE_URL=${1:-http://127.0.0.1:8080}
@@ -164,7 +166,83 @@ archived_b=$(sql "SELECT COUNT(*) FROM audit_events_archive WHERE aggregate_type
 [ "$live_b" = '1' ] && [ "$archived_b" = '1' ] \
     || fail "expected exactly one archived + one live event for order B (live=$live_b archived=$archived_b)"
 
+printf '%s\n' '=== V7 timestamp invariants ship with the migrations ==='
+check_constraints=$(sql "SELECT GROUP_CONCAT(constraint_name ORDER BY constraint_name)
+    FROM information_schema.table_constraints
+    WHERE table_schema = DATABASE() AND table_name = 'orders' AND constraint_type = 'CHECK'
+      AND constraint_name IN ('chk_orders_updated_after_created', 'chk_orders_reserved_expiry')")
+note "orders check constraints=$check_constraints"
+[ "$check_constraints" = 'chk_orders_reserved_expiry,chk_orders_updated_after_created' ] \
+    || fail "V7 check constraints are '$check_constraints', expected chk_orders_reserved_expiry,chk_orders_updated_after_created"
+
+printf '%s\n' '=== V7 rejects a reservation that expires before it was created ==='
+# An enforced constraint is the reason the sweep below only ever meets *legacy* corruption.
+if sql "UPDATE orders SET expires_at = created_at - INTERVAL 1 MINUTE WHERE id = '$ORDER_A'" >/dev/null 2>&1; then
+    fail 'V7 chk_orders_reserved_expiry accepted expires_at <= created_at'
+fi
+# ...and it stays enforced after a rejected write (InnoDB rejects the statement, not the row silently).
+still_valid=$(sql "SELECT COUNT(*) FROM orders WHERE id = '$ORDER_A' AND expires_at > created_at")
+[ "$still_valid" = '1' ] || fail 'a rejected write must leave the stored row untouched'
+
+printf '%s\n' '=== one unreadable row degrades the sweep instead of wedging it ==='
+# Reproduce pre-V7 (or out-of-band) corruption on purpose: disable the invariant for one write only.
+sql 'ALTER TABLE orders ALTER CHECK chk_orders_reserved_expiry NOT ENFORCED' > /dev/null
+sql "UPDATE orders
+        SET created_at = NOW(6) - INTERVAL 2 HOUR,
+            updated_at = NOW(6) - INTERVAL 2 HOUR,
+            expires_at = NOW(6) - INTERVAL 3 HOUR
+      WHERE id = '$ORDER_A'" > /dev/null
+# A second, healthy reservation in the same batch: it must still be released.
+ORDER_C=$(curl -sS -X POST "$BASE_URL/api/v1/orders" -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' -H "Idempotency-Key: $RUN_ID-order-c" \
+    -d "{\"sku\":\"$SKU\",\"quantity\":1}" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+[ -n "$ORDER_C" ] || fail 'failed to place the healthy companion order'
+sql "UPDATE orders
+        SET created_at = NOW(6) - INTERVAL 2 HOUR,
+            updated_at = NOW(6) - INTERVAL 2 HOUR,
+            expires_at = NOW(6) - INTERVAL 1 MINUTE
+      WHERE id = '$ORDER_C'" > /dev/null
+
+# Reading the corrupt row is a server-side defect, not a caller error: 500, never 400.
+corrupt_status=$(curl -sS -o "$TMP_DIR/corrupt-order.json" -w '%{http_code}' \
+    -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/v1/orders/$ORDER_A")
+expect_status 500 "$corrupt_status" 'reading a corrupt stored order'
+grep -q '"code":"STORED_STATE_INVALID"' "$TMP_DIR/corrupt-order.json" \
+    || fail "corrupt order did not report STORED_STATE_INVALID: $(cat "$TMP_DIR/corrupt-order.json")"
+
+degraded=$(maintenance expire-reservations)
+grep -q 'MAINTENANCE_OK command=expire-reservations .* failed=1$' "$TMP_DIR/expire-reservations.log" \
+    || fail "sweep did not report exactly one failure: $(cat "$TMP_DIR/expire-reservations.log")"
+grep -q 'violates a domain invariant' "$TMP_DIR/expire-reservations.log" \
+    || fail "sweep did not name the unreadable row: $(cat "$TMP_DIR/expire-reservations.log")"
+note "degraded sweep affected=${degraded:-0}"
+[ "${degraded:-0}" -ge 1 ] || fail "degraded sweep applied to $degraded orders, expected >= 1"
+
+api GET "/api/v1/orders/$ORDER_C" > "$TMP_DIR/order-c.json"
+grep -q '"status":"CANCELLED"' "$TMP_DIR/order-c.json" \
+    || fail "a corrupt row blocked the healthy colleague: $(cat "$TMP_DIR/order-c.json")"
+
+printf '%s\n' '=== repairing the row lets the same sweep finish and the constraint go back on ==='
+# Still expired, now consistent: created 2h ago, deadline 1h ago.
+sql "UPDATE orders
+        SET updated_at = NOW(6) - INTERVAL 1 HOUR,
+            expires_at = NOW(6) - INTERVAL 1 HOUR
+      WHERE id = '$ORDER_A'" > /dev/null
+sql 'ALTER TABLE orders ALTER CHECK chk_orders_reserved_expiry ENFORCED' > /dev/null
+repaired=$(maintenance expire-reservations)
+grep -q 'MAINTENANCE_OK command=expire-reservations .* failed=0$' "$TMP_DIR/expire-reservations.log" \
+    || fail "repaired sweep still reports failures: $(cat "$TMP_DIR/expire-reservations.log")"
+[ "${repaired:-0}" -ge 1 ] || fail "repaired sweep applied to $repaired orders, expected >= 1"
+api GET "/api/v1/orders/$ORDER_A" > "$TMP_DIR/order-a.json"
+grep -q '"status":"CANCELLED"' "$TMP_DIR/order-a.json" \
+    || fail "repaired order was not cancelled: $(cat "$TMP_DIR/order-a.json")"
+assert_ledger 5 0
+
 curl -sS -o /dev/null -X DELETE -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/v1/auth/token" || true
 TOKEN=''
-printf '\nMAINTENANCE CHECK OK: archive_rows=%s archived_order_b=%s expired=%s\n' \
-    "$archive_rows" "$order_b_archived" "$expired_summary"
+summary=$(printf 'archive_rows=%s archived_order_b=%s expired=%s degraded=%s repaired=%s' \
+    "$archive_rows" "$order_b_archived" "$expired_summary" "${degraded:-0}" "${repaired:-0}")
+printf '\nMAINTENANCE CHECK OK: %s\n' "$summary"
+# ::notice:: surfaces the drill's outcome as a check annotation: raw job logs are often unreachable
+# from outside CI, and "the drill passed" should not require downloading a log to confirm.
+printf '::notice title=maintenance drill::MAINTENANCE CHECK OK %s\n' "$summary"
