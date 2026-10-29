@@ -48,9 +48,12 @@ for report in target/surefire-reports/*.txt target/failsafe-reports/*.txt target
     annotate "$(basename "$report")" "$details"
 done
 
-# 2) Explicit logs (drill scripts print a single clear FAILED line).
+# 2) Explicit logs. The interesting part is usually the *head* of the first exception, not the tail
+#    of a 40-frame stack trace, so emit both: the first exception lines, then the last few lines.
 for log in "$@"; do
     [ -f "$log" ] || continue
-    details=$(tail -40 "$log")
-    annotate "$(basename "$log")" "$details"
+    head_of_failure=$(grep -nE '(Exception|Error:|SQL State|Message *:|FAILED|ERROR)' "$log" \
+        | head -8 | cut -d: -f2-)
+    annotate "$(basename "$log") head" "$head_of_failure"
+    annotate "$(basename "$log") tail" "$(tail -15 "$log")"
 done
