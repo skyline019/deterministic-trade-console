@@ -34,7 +34,7 @@
 - **Redis fail-closed 不变**：`RetryingLockManager` 仅对 I/O 失败做有界重试（默认 3×50ms），争用（空 Optional）不重试；读路径仍不依赖 Redis。
 - **通用 API 限流**：认证后按 actor 固定窗口（`trade.security.api-attempt-limit` / `api-window`），Redis 故障同样 fail-closed → `LOCK_UNAVAILABLE`。
 - **关联追踪**：`CorrelationIdFilter` 传播 `X-Request-Id` 并写入 MDC；完整 OTel 导出仍是可选外部装配，非应用内隐式代理。
-- **告警样例**：`ops/prometheus-alerts.yml`（由 Prometheus 加载，非 `@Scheduled`）。
+- **告警样例**：`ops/prometheus/alerts.yml`（`ops/prometheus/prometheus.yml` 加载，非 `@Scheduled`）。
 - **审计检查点**：`CHAIN_CHECKPOINT` + `verify?trustedCheckpointHash=`；运维 `checkpoint-audit`（`scripts/checkpoint-audit.sh`）。
 - **浏览器会话**：默认 Bearer + `sessionStorage`；HTTPS 可选 Cookie（`__Host-TradeSession`）；`VITE_SESSION_PERSIST=memory` 仅影响 Bearer；CSP `object-src 'none'`。
 

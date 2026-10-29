@@ -1,12 +1,15 @@
 package concept;
 
 import com.acme.trade.application.command.PlaceOrderCommand;
+import com.acme.trade.application.exception.RequestInProgressException;
 import com.acme.trade.application.port.AuditRepository;
 import com.acme.trade.application.port.MaintenanceStore;
+import com.acme.trade.application.result.SweepReport;
 import com.acme.trade.application.service.AuditService;
 import com.acme.trade.application.service.MaintenanceService;
 import com.acme.trade.domain.audit.AggregateRef;
 import com.acme.trade.domain.audit.AuditEvent;
+import com.acme.trade.domain.exception.OrderStateConflictException;
 import com.acme.trade.domain.model.Order;
 import com.acme.trade.domain.model.OrderId;
 import com.acme.trade.domain.model.OrderStatus;
@@ -28,6 +31,8 @@ import static concept.ConceptFixture.NOW;
 import static concept.ConceptFixture.OPERATOR;
 import static concept.ConceptFixture.SKU;
 import static jtest.JExpect.expectEquals;
+import static jtest.JExpect.expectFalse;
+import static jtest.JExpect.expectThrows;
 import static jtest.JExpect.expectTrue;
 
 /** Expired RESERVED orders cancel through OrderTransitionService (same ledger as manual cancel). */
@@ -52,14 +57,15 @@ public final class ReservationExpiryConcept implements Concept {
 
             MaintenanceService maintenance = new MaintenanceService(noopStore(), auditService(fixture),
                     fixture.orders, fixture.transitions, CLOCK);
-            int affected = maintenance.expireReservations(10);
-            expectEquals(1, affected);
+            SweepReport report = maintenance.expireReservations(10);
+            expectEquals(1, report.applied());
+            expectTrue(report.complete());
             Order after = fixture.orders.findById(expired.id()).orElseThrow();
             expectEquals(OrderStatus.CANCELLED, after.status());
             expectEquals(0, fixture.reserved());
             expectEquals(10, fixture.available());
 
-            expectEquals(0, maintenance.expireReservations(10));
+            expectEquals(0, maintenance.expireReservations(10).applied());
             fixture.transitions.transition(
                     new Actor("system-expiry", "system-expiry", EnumSet.of(Role.OPERATOR)),
                     new RequestId("expire-" + expired.id()),
@@ -79,8 +85,60 @@ public final class ReservationExpiryConcept implements Concept {
 
             MaintenanceService maintenance = new MaintenanceService(noopStore(), auditService(fixture),
                     fixture.orders, fixture.transitions, CLOCK);
-            expectEquals(0, maintenance.expireReservations(10));
+            expectEquals(0, maintenance.expireReservations(10).applied());
             expectEquals(OrderStatus.RESERVED, fixture.orders.findById(placed.order().id()).orElseThrow().status());
+        });
+
+        tests.test("deadline_is_a_hard_boundary_for_confirm", () -> {
+            ConceptFixture fixture = new ConceptFixture();
+            fixture.seed(10);
+            Quantity qty = new Quantity(4);
+            expectTrue(fixture.inventory.tryReserve(SKU, qty, NOW));
+            Order expired = Order.reserved(OrderId.random(), new RequestId("expired-confirm"), SKU, qty,
+                    NOW.minusSeconds(7200), NOW.minusSeconds(60));
+            fixture.orders.insert(expired);
+
+            // Confirming before the operator sweep must fail exactly like confirming after it,
+            // otherwise the outcome depends on when maintenance last ran.
+            expectThrows(OrderStateConflictException.class, () -> fixture.transitions.confirm(
+                    OPERATOR, new RequestId("confirm-expired"), expired.id(), null, "manual-confirm"));
+            expectEquals(OrderStatus.RESERVED, fixture.orders.findById(expired.id()).orElseThrow().status());
+            expectEquals(4, fixture.reserved());
+            expectEquals(6, fixture.available());
+
+            MaintenanceService maintenance = new MaintenanceService(noopStore(), auditService(fixture),
+                    fixture.orders, fixture.transitions, CLOCK);
+            expectEquals(1, maintenance.expireReservations(10).applied());
+            expectEquals(0, fixture.reserved());
+            expectEquals(10, fixture.available());
+        });
+
+        tests.test("one_racing_order_does_not_abort_the_sweep", () -> {
+            ConceptFixture fixture = new ConceptFixture();
+            fixture.seed(10);
+            for (String seeded : List.of("sweep-a", "sweep-b")) {
+                Quantity qty = new Quantity(2);
+                expectTrue(fixture.inventory.tryReserve(SKU, qty, NOW));
+                fixture.orders.insert(Order.reserved(OrderId.random(), new RequestId(seeded), SKU, qty,
+                        NOW.minusSeconds(7200), NOW.minusSeconds(60)));
+            }
+            // One selected order loses a race on its receipt insert; the sweep must still cancel the rest.
+            fixture.orderOperations.insertFailure =
+                    new RequestInProgressException("sweep-a");
+
+            MaintenanceService maintenance = new MaintenanceService(noopStore(), auditService(fixture),
+                    fixture.orders, fixture.transitions, CLOCK);
+            SweepReport report = maintenance.expireReservations(10);
+            expectEquals(2, report.attempted());
+            expectEquals(1, report.applied());
+            expectEquals(1, report.failed());
+            expectFalse(report.complete());
+            expectEquals(2, fixture.reserved());
+
+            // The healthy order was cancelled and its reservation released exactly once.
+            expectEquals(1, maintenance.expireReservations(10).applied());
+            expectEquals(0, fixture.reserved());
+            expectEquals(10, fixture.available());
         });
     }
 

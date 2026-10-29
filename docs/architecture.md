@@ -45,7 +45,7 @@ MySQL（事实源） + Redis（互斥与登录限流）
 
 库存回执和订单迁移回执有独立唯一键命名空间。迁移先把请求身份写入 `order_operations`，再执行条件状态更新和台账更新；同订单不同请求键的并发败方会回滚自己的回执，不留下“无订单效果的回执”。取消增加 `available`、减少 `reserved`；确认只减少 `reserved`。
 
-过期释放：运维 one-shot `expire-reservations` 对 `expires_at <= now` 的 `RESERVED` 调用同一 `OrderTransitionService`（幂等键 `expire-{orderId}`），禁止第二套取消路径。
+过期释放：运维 one-shot `expire-reservations` 对 `expires_at <= now` 的 `RESERVED` 调用同一 `OrderTransitionService`（幂等键 `expire-{orderId}`），禁止第二套取消路径。sweep 只是**回收手段**而不是语义来源：`expires_at` 已过期的订单在确认路径上同样被拒绝，因此命令结果与 sweep 的运行时机无关；sweep 逐项隔离失败并回报 `SweepReport`（attempted/applied/failed），单个竞争订单不会让整批停摆。
 
 ### 认证
 

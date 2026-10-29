@@ -68,6 +68,7 @@ public final class InventoryCommandConcept implements Concept {
             expectEquals(1, fixture.inventoryOperations.size());
         });
 
+
         tests.test("capacity_matrix_includes_reserved_stock_and_integer_extremes", () -> {
             ConceptFixture fixture = new ConceptFixture();
             fixture.inventoryService.create(OPERATOR, new RequestId("create-capacity"), SKU,

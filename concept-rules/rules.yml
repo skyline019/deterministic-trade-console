@@ -1,4 +1,4 @@
-version: 2
+version: 3
 rules:
   - id: AR-001
     concept: pure-domain
@@ -93,3 +93,22 @@ invariants:
   - id: INV-012
     rule: Frontend visibility is advisory; every privileged operation is rechecked by Application RBAC.
     enforced_by: ServiceCapabilityConcept, HTTP RBAC IT and Playwright role scenarios
+  - id: INV-013
+    rule: >
+      A reservation's expires_at is authoritative for every command, not a hint for the sweep.
+      Confirm and reschedule reject an expired reservation even when expire-reservations has not run,
+      so a command's outcome never depends on when maintenance last ran.
+    enforced_by: OrderTransitionService confirm guard, ReservationExpiryConcept#deadline_is_a_hard_boundary_for_confirm
+  - id: INV-014
+    rule: >
+      Archiving moves a chain out of audit_events; it must not restart or truncate it. Reads span
+      live and archived rows, the next append continues from the archived tip, and verification still
+      covers the archived prefix instead of reporting "no events".
+    enforced_by: MySqlAuditRepository union reads, MySqlMaintenanceStore bounded copy+delete, HighConcurrencyIT#archiving_a_chain_preserves_sequence_and_verifiability
+  - id: INV-015
+    rule: >
+      A maintenance sweep isolates failures per item: one order that lost a race is reported in
+      SweepReport and the batch continues, so a one-shot job keeps making progress and never reports
+      a silent partial success.
+    enforced_by: SweepReport, MaintenanceService per-item isolation, ReservationExpiryConcept#one_racing_order_does_not_abort_the_sweep
+

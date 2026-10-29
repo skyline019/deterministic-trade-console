@@ -11,7 +11,8 @@
 结果：`BUILD SUCCESS`。
 
 - JUnit / ArchUnit / Lua / Schema / SQL 性能契约：22 passed。
-- 自研 jtest：76 checks passed。
+- 自研 jtest：以 `ConceptEntrypoint` 输出的 `[  PASSED  ] N checks.` 为准（该数字随概念增长，
+  本文不再抄写具体值以免漂移）。当前注册 20 个概念套件。
 
 ## 容器集成（`-Pintegration`）
 
@@ -41,6 +42,7 @@ export BOOTSTRAP_ADMIN_PASSWORD='local-admin-only'
 docker compose up --build -d
 ./scripts/smoke.sh http://127.0.0.1:8080
 ./scripts/contend.sh http://127.0.0.1:8080
+./scripts/ci-maintenance-check.sh http://127.0.0.1:8080   # 归档搬运 + 过期扫描 + V6 索引
 ```
 
 结果：
@@ -94,7 +96,7 @@ npx playwright test -c playwright.same-origin.config.ts
 | 缺口 | 落地 |
 |---|---|
 | Redis fail-closed 可用性 | `RetryingLockManager`（默认 3×50ms，仅 I/O；争用不重试） |
-| 通用限流 / tracing / 告警 | `ApiRateLimitFilter` + `X-Request-Id`/MDC + `ops/prometheus-alerts.yml` |
+| 通用限流 / tracing / 告警 | `ApiRateLimitFilter` + `X-Request-Id`/MDC + `ops/prometheus/alerts.yml` |
 | 超大活跃审计链 | `CHAIN_CHECKPOINT` + `trustedCheckpointHash` + `checkpoint-audit` |
 | XSS / sessionStorage | `VITE_SESSION_PERSIST=memory`；CSP `object-src 'none'` |
 
@@ -210,9 +212,20 @@ k6 run -e BASE_URL=http://127.0.0.1:8080 -e PASSWORD=local-admin-only \
 | L3 证据补强 | `test:e2e:demo` 为 CI 显式 Demo；`test:e2e` 打印警告；Demo/同源 E2E 增部分确认+改期；`scripts/expire-reservations.sh` |
 | L4 JWKS 薄片 | `mode=jwks` + 静态 `jwks-json` RS256；可关密码登录；jtest `JwksAuthn`（kid 轮换） |
 
-后端 `./mvnw -B verify`：**BUILD SUCCESS**（ArchUnit 23 + jtest **97** checks，含 JwksAuthn×3）。  
-前端 `npm test`：**29 passed**；`npm run test:e2e:demo`：**10 passed**（含 partial/reschedule；仅 `console.spec.ts`）。  
-同源 E2E / expire 脚本：需 Compose 手工跑（CI 不跑）。
+后端 `./mvnw -B verify`：**BUILD SUCCESS**（ArchUnit 23 + jtest `[  PASSED  ] N checks.`，含 JwksAuthn×3；N 以运行输出为准）。  
+前端 `npm test`：**34 passed**；`npm run test:e2e:demo`：**10 passed**（含 partial/reschedule；仅 `console.spec.ts`）。  
+同源 E2E / cookie E2E / maintenance 演练：本地需 Compose 手工跑；CI 由 `compose-stack` 作业执行（见下）。
+
+## CI 覆盖矩阵（补上本机/沙箱测不到的部分）
+
+| 作业 | 需要的运行时 | 覆盖的是"本地测不到"的哪一段 |
+|---|---|---|
+| `architecture-and-core` | 无 | ArchUnit 13 条 + jtest 全量 + `SchemaContractTest`（含**迁移链连续性/只前进**两条新契约） |
+| `vue-console` | Node | 单测、`vue-tsc`、构建、Demo E2E（非证据） |
+| `mysql-redis-concurrency` | Docker | **Flyway 真迁移**（`MigrationIT`：V1..V6 表面 + `baseline-on-migrate=false` 失败即停）、**归档不截断链**（`HighConcurrencyIT#archiving_a_chain_preserves_sequence_and_verifiability`）、并发守恒 |
+| `compose-stack` | Docker + Compose | **生产镜像构建**、Compose 装配（MySQL/Redis/Caddy TLS）、`smoke.sh`、`contend.sh`（50×201+50×409）、`ci-maintenance-check.sh`（归档后仍可验链、过期扫描释放台账、V6 索引存在）、`same-origin` 与 `https-cookie` 两套 E2E（含刷新后 cookie 会话恢复） |
+
+`ci-ok` 是唯一需要在分支保护里勾选的检查，它依赖上述四个作业全部通过。
 
 ## 学习闭环结论（同日收口）
 

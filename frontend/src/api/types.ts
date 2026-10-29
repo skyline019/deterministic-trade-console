@@ -100,6 +100,8 @@ export interface Mutation<T> {
 
 export interface TradeGateway {
   login(username: string, password: string): Promise<Session>
+  /** Current actor for the presented credential; used to revalidate a cookie session after reload. */
+  me(session: Session): Promise<Actor>
   logout(session: Session): Promise<void>
   dashboard(session: Session): Promise<DashboardStats>
   listInventory(session: Session): Promise<Inventory[]>

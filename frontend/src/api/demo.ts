@@ -99,6 +99,10 @@ export class DemoGateway implements TradeGateway {
     return clone(session)
   }
 
+  async me(session: Session): Promise<Actor> {
+    return clone(this.requireActor(session))
+  }
+
   async logout(session: Session): Promise<void> {
     this.sessions.delete(session.accessToken)
     this.revokedTokens.add(session.accessToken)

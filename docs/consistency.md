@@ -54,6 +54,10 @@ Redis 锁显著减少同键冲突，但不是正确性的最后防线。锁 key 
 | RESERVED 超过 `expires_at` | 运维 `expire-reservations` 按取消释放台账；非隐式 `@Scheduled` | 同 `OrderTransitionService` + 幂等键 `expire-{orderId}` |
 | 改期与 expire/cancel 并发 | 最多一个效果：条件更新 `status=RESERVED AND expires_at=?` 或终态迁移 | ADR 003；败方 `ORDER_STATE_CONFLICT` |
 | 对已过期订单改期 | 拒绝；不可绕过 expire/cancel「复活」 | Domain `isExpiredAt` + Application 校验 |
+| 对已过期订单确认 | 拒绝（`ORDER_STATE_CONFLICT`），与 sweep 是否已运行无关 | `OrderTransitionService.confirm` 在事务内校验 `isExpiredAt`（INV-013） |
+| 审计归档后继续追加 | 读取跨越 `audit_events` 与 `audit_events_archive`，sequence 从归档 tip 继续，验链仍覆盖已归档前缀 | `MySqlAuditRepository` UNION 读取 + 有界 copy/delete（INV-014） |
+| 归档与并发追加交错 | 复制集合与删除集合都由复制前的 `MAX(sequence)` 界定，窗口内新事件留在在线表 | `MySqlMaintenanceStore` 有界删除 |
+| 维护批次中单个订单失败 | 该订单记入 `SweepReport`，其余订单继续，批次不会整体回滚 | `MaintenanceService` 逐项隔离（INV-015） |
 | 超长活跃审计链 | 可选 `CHAIN_CHECKPOINT`；验链可用外带信任的 checkpoint hash 只验后缀 | `AuditChainVerifier.verifySinceTrusted` |
 | 登录限流复位失败 | 不持久化未返回的 Token | reset 先于 Token 事务 |
 | Token 过期、撤销或用户禁用 | 后续请求 401 | 数据库 active actor 查询 |
@@ -65,6 +69,8 @@ Redis 锁显著减少同键冲突，但不是正确性的最后防线。锁 key 
 订单链和库存链分别验证，不能混成一个全局序列。一个预占产生 `ORDER_RESERVED` 与 `STOCK_RESERVED`，二者与业务事务同生共死；取消/确认同样产生两条分链事件。
 
 `findRecent` 是读取最近 N 条的展示查询；完整验证必须读取该聚合全部事件，并检查第一条 previous hash、连续 sequence、每个绑定字段与后序链接。空链有明确结果，不把“没读到”当成“已证明有很多事件”。
+
+归档（`trade.maintenance.command=archive-audit`）只搬运整条聚合链，绝不切断它：读取同时覆盖在线表与归档表，归档后新的追加会从归档 tip 的 sequence+1 继续，`verify` 仍校验包含已归档前缀的完整链（`checkedEvents` 不为 0）。归档表被外部删除属于**可检测**的篡改，`verify` 会失败而不是返回"无事件即通过"。
 
 运维可对长链追加 `CHAIN_CHECKPOINT`（显式 `trade.maintenance.command=checkpoint-audit`）。增量验链要求调用方**外带信任**该检查点的 `eventHash`（`trustedCheckpointHash` 查询参数）；检查点本身不能自我证明前缀未被篡改。
 

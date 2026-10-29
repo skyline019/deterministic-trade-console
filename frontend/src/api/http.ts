@@ -1,6 +1,7 @@
 import {
   ApiError,
   type AuditEvent,
+  type Actor,
   type AuditVerification,
   type DashboardStats,
   type Inventory,
@@ -124,6 +125,10 @@ export const httpGateway: TradeGateway = {
       tokenType: mode === 'cookie' ? 'Cookie' : 'Bearer',
       authMode: mode,
     }
+  },
+
+  async me(session) {
+    return (await request<Actor>(session, '/api/v1/auth/me')).value
   },
 
   async logout(session) {

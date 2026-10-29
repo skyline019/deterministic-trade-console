@@ -37,6 +37,11 @@ public final class MySqlMaintenanceStore implements MaintenanceStore {
         return deleted == null ? 0 : deleted;
     }
 
+    /**
+     * Copies and deletes exactly the same bounded row set: {@code sequence <= tip} is resolved before
+     * the copy, so an event appended to a "quiet" aggregate in between stays live instead of being
+     * deleted without ever reaching the archive table.
+     */
     @Override
     public int archiveQuietAggregates(Instant cutoff, Instant archivedAt, int maxAggregates) {
         if (maxAggregates < 1) {
@@ -44,14 +49,15 @@ public final class MySqlMaintenanceStore implements MaintenanceStore {
         }
         Integer archived = transactions.execute(status -> {
             List<AggregateKey> quiet = jdbc.query("""
-                    SELECT aggregate_type, aggregate_id
+                    SELECT aggregate_type, aggregate_id, MAX(sequence) AS tip_sequence
                     FROM audit_events
                     GROUP BY aggregate_type, aggregate_id
                     HAVING MAX(occurred_at) < ?
                     ORDER BY MAX(occurred_at) ASC
                     LIMIT ?
                     """,
-                    (rs, rowNum) -> new AggregateKey(rs.getString("aggregate_type"), rs.getString("aggregate_id")),
+                    (rs, rowNum) -> new AggregateKey(
+                            rs.getString("aggregate_type"), rs.getString("aggregate_id"), rs.getLong("tip_sequence")),
                     Timestamp.from(cutoff), maxAggregates);
             int count = 0;
             Timestamp archivedTs = Timestamp.from(archivedAt);
@@ -63,10 +69,12 @@ public final class MySqlMaintenanceStore implements MaintenanceStore {
                         SELECT id, aggregate_type, aggregate_id, sequence, action, actor_id, actor_name,
                                request_id, occurred_at, payload_json, previous_hash, event_hash, ?
                         FROM audit_events
-                        WHERE aggregate_type = ? AND aggregate_id = ?
-                        """, archivedTs, key.type(), key.id());
-                jdbc.update("DELETE FROM audit_events WHERE aggregate_type = ? AND aggregate_id = ?",
-                        key.type(), key.id());
+                        WHERE aggregate_type = ? AND aggregate_id = ? AND sequence <= ?
+                        """, archivedTs, key.type(), key.id(), key.tipSequence());
+                jdbc.update("""
+                        DELETE FROM audit_events
+                        WHERE aggregate_type = ? AND aggregate_id = ? AND sequence <= ?
+                        """, key.type(), key.id(), key.tipSequence());
                 count++;
             }
             return count;
@@ -107,6 +115,6 @@ public final class MySqlMaintenanceStore implements MaintenanceStore {
                 maxAggregates);
     }
 
-    private record AggregateKey(String type, String id) {
+    private record AggregateKey(String type, String id, long tipSequence) {
     }
 }

@@ -96,7 +96,10 @@ public final class InventoryService {
             if (type == InventoryOperationType.CREATE) {
                 throw new ResourceConflictException("sku already exists: " + sku.value());
             }
-            throw new StockAdjustmentRejectedException("adjustment would violate stock or capacity bounds");
+            // Contract (pinned by jtest + mirrored by the demo gateway): a rejected adjustment is one
+            // 409 STOCK_ADJUSTMENT_REJECTED whether the row is missing or the bounds are violated.
+            // Splitting it into 404 would be a public API change across adapter, demo and docs.
+            throw new StockAdjustmentRejectedException("unknown sku or out-of-bounds adjustment: " + sku.value());
         }
         Inventory current = inventory.find(sku).orElseThrow();
         InventoryOperation operation = new InventoryOperation(requestId, sku, type, delta, reason,

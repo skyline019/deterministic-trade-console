@@ -2,6 +2,7 @@ package com.acme.trade.application.service;
 
 import com.acme.trade.application.port.MaintenanceStore;
 import com.acme.trade.application.port.OrderRepository;
+import com.acme.trade.application.result.SweepReport;
 import com.acme.trade.domain.audit.AggregateRef;
 import com.acme.trade.domain.exception.ValidationException;
 import com.acme.trade.domain.model.Order;
@@ -13,6 +14,7 @@ import com.acme.trade.domain.security.Role;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Objects;
@@ -59,42 +61,60 @@ public final class MaintenanceService {
 
     /**
      * Appends {@code CHAIN_CHECKPOINT} events for long live chains so auditors can verify
-     * suffixes against an out-of-band attested checkpoint hash.
-     *
-     * @return number of checkpoints written in this batch
+     * suffixes against an out-of-band attested checkpoint hash. A chain that moved between the
+     * candidate query and the append is reported as a failure instead of aborting the batch.
      */
-    public int checkpointLongChains(int minEventsSinceCheckpoint, int maxAggregates) {
+    public SweepReport checkpointLongChains(int minEventsSinceCheckpoint, int maxAggregates) {
         requireBatch(maxAggregates);
         if (minEventsSinceCheckpoint < 10 || minEventsSinceCheckpoint > 1_000_000) {
             throw new ValidationException("checkpoint spacing must be between 10 and 1000000");
         }
         List<AggregateRef> candidates = store.listCheckpointCandidates(minEventsSinceCheckpoint, maxAggregates);
+        List<String> failures = new ArrayList<>();
         int written = 0;
         for (AggregateRef aggregate : candidates) {
             RequestId requestId = new RequestId("checkpoint-" + UUID.randomUUID());
-            audits.appendCheckpoint(MAINTENANCE_ACTOR, aggregate, requestId);
-            written++;
+            try {
+                audits.appendCheckpoint(MAINTENANCE_ACTOR, aggregate, requestId);
+                written++;
+            } catch (RuntimeException failure) {
+                failures.add(aggregate.type() + "/" + aggregate.id() + ": " + describe(failure));
+            }
         }
-        return written;
+        return new SweepReport(candidates.size(), written, failures);
     }
 
     /**
      * Cancels expired RESERVED orders through {@link OrderTransitionService} (same ledger as manual cancel).
      * Idempotent per order via request id {@code expire-{orderId}}.
      *
-     * @return number of expire transitions attempted successfully (including replays)
+     * <p>Per-order isolation is deliberate: an order confirmed or cancelled between
+     * {@code findExpiredReserved} and the transition is an expected race, and must not keep the rest of
+     * the batch reserved. Failures are reported, not thrown, so a cron job keeps making progress.
      */
-    public int expireReservations(int batchSize) {
+    public SweepReport expireReservations(int batchSize) {
         requireBatch(batchSize);
         Instant now = clock.instant();
         List<Order> expired = orders.findExpiredReserved(now, batchSize);
+        List<String> failures = new ArrayList<>();
         int affected = 0;
         for (Order order : expired) {
             RequestId requestId = new RequestId("expire-" + order.id());
-            transitions.transition(EXPIRY_ACTOR, requestId, order.id(), OrderStatus.CANCELLED, EXPIRE_REASON);
-            affected++;
+            try {
+                transitions.transition(EXPIRY_ACTOR, requestId, order.id(), OrderStatus.CANCELLED, EXPIRE_REASON);
+                affected++;
+            } catch (RuntimeException failure) {
+                failures.add(order.id() + ": " + describe(failure));
+            }
         }
-        return affected;
+        return new SweepReport(expired.size(), affected, failures);
+    }
+
+    /** Bounded, payload-free description: exception type only (no SQL, tokens or request bodies). */
+    private static String describe(RuntimeException failure) {
+        String message = failure.getMessage();
+        String type = failure.getClass().getSimpleName();
+        return message == null || message.isBlank() ? type : type + " (" + message + ")";
     }
 
     private static void requireBatch(int batchSize) {

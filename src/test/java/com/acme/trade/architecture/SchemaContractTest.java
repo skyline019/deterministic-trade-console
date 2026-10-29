@@ -3,7 +3,15 @@ package com.acme.trade.architecture;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Comparator;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -52,6 +60,54 @@ class SchemaContractTest {
                 "archived_at TIMESTAMP(6) NOT NULL",
                 "uk_audit_archive_aggregate_sequence UNIQUE (aggregate_type, aggregate_id, sequence)");
         assertThat(archive).doesNotContain("DELETE FROM audit_events", "UPDATE audit_events");
+    }
+
+    @Test
+    void migration_versions_are_contiguous_and_forward_only() throws IOException, URISyntaxException {
+        List<String> files = migrationFiles();
+        List<Integer> versions = files.stream().map(SchemaContractTest::versionOf).toList();
+        // A gap means a version that was renumbered or deleted after being shipped: Flyway would
+        // either skip it or fail on an unrelated database, and no other test would notice.
+        assertThat(versions).isSorted();
+        assertThat(versions).doesNotHaveDuplicates();
+        for (int i = 0; i < versions.size(); i++) {
+            assertThat(versions.get(i))
+                    .as("migration chain must start at V1 and have no gaps: %s", files)
+                    .isEqualTo(i + 1);
+        }
+        assertThat(versions.size())
+                .as("the archive scan index (V6) must remain part of the chain")
+                .isGreaterThanOrEqualTo(6);
+    }
+
+    @Test
+    void no_migration_rewrites_audit_history_it_can_only_extend_the_schema()
+            throws IOException, URISyntaxException {
+        for (String migrate : migrationFiles()) {
+            String sql = resource("db/migration/" + migrate);
+            assertThat(sql.replaceAll("(?m)^\\s*--.*$", "").toLowerCase())
+                    .as("%s must not mutate or drop audit rows; cold storage is an adapter concern", migrate)
+                    .doesNotContain("delete from audit_events", "update audit_events", "drop table audit_events");
+        }
+    }
+
+    private static List<String> migrationFiles() throws IOException, URISyntaxException {
+        var url = Thread.currentThread().getContextClassLoader().getResource("db/migration/V1__baseline_schema.sql");
+        assertThat(url).as("V1 must be on the test classpath").isNotNull();
+        Path directory = Path.of(url.toURI()).getParent();
+        try (Stream<Path> entries = Files.list(directory)) {
+            return entries.map(path -> path.getFileName().toString())
+                    .filter(name -> name.startsWith("V") && name.endsWith(".sql"))
+                    // Numeric order: a future V10 must not sort before V2.
+                    .sorted(Comparator.comparingInt(SchemaContractTest::versionOf))
+                    .toList();
+        }
+    }
+
+    private static int versionOf(String fileName) {
+        Matcher matcher = Pattern.compile("^V(\\d+)__.*\\.sql$").matcher(fileName);
+        assertThat(matcher.matches()).as("unexpected migration name: %s", fileName).isTrue();
+        return Integer.parseInt(matcher.group(1));
     }
 
     private static String schema() throws IOException {

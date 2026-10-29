@@ -17,6 +17,15 @@ import java.util.UUID;
 public final class MySqlAuditRepository implements AuditRepository {
     private static final String COLUMNS = "id, aggregate_type, aggregate_id, sequence, action, actor_id, "
             + "actor_name, request_id, occurred_at, payload_json, previous_hash, event_hash";
+    /**
+     * Reads span live and archived rows. Archiving moves whole chains out of {@code audit_events}, so a
+     * live-only read would restart the chain at sequence 1 (forked history) and would report
+     * "no events" for a truncated past. {@code UNION} rather than {@code UNION ALL} keeps a crash
+     * between the archive copy and the live delete idempotent: the same event in both tables is
+     * counted once, so verification still sees one link per sequence.
+     */
+    private static final String SOURCE = "(SELECT " + COLUMNS + " FROM audit_events"
+            + " UNION SELECT " + COLUMNS + " FROM audit_events_archive) audit_chain";
     private static final RowMapper<AuditEvent> MAPPER = (rs, rowNum) -> new AuditEvent(
             UUID.fromString(rs.getString("id")),
             new AggregateRef(AggregateType.valueOf(rs.getString("aggregate_type")), rs.getString("aggregate_id")),
@@ -33,21 +42,21 @@ public final class MySqlAuditRepository implements AuditRepository {
 
     @Override
     public Optional<AuditEvent> findLast(AggregateRef aggregate) {
-        return jdbc.query("SELECT " + COLUMNS + " FROM audit_events "
+        return jdbc.query("SELECT " + COLUMNS + " FROM " + SOURCE + " "
                         + "WHERE aggregate_type = ? AND aggregate_id = ? ORDER BY sequence DESC LIMIT 1",
                 MAPPER, aggregate.type().name(), aggregate.id()).stream().findFirst();
     }
 
     @Override
     public List<AuditEvent> findChain(AggregateRef aggregate) {
-        return jdbc.query("SELECT " + COLUMNS + " FROM audit_events "
+        return jdbc.query("SELECT " + COLUMNS + " FROM " + SOURCE + " "
                         + "WHERE aggregate_type = ? AND aggregate_id = ? ORDER BY sequence ASC",
                 MAPPER, aggregate.type().name(), aggregate.id());
     }
 
     @Override
     public List<AuditEvent> findRecent(AggregateRef aggregate, int limit) {
-        return jdbc.query("SELECT " + COLUMNS + " FROM (SELECT " + COLUMNS + " FROM audit_events "
+        return jdbc.query("SELECT " + COLUMNS + " FROM (SELECT " + COLUMNS + " FROM " + SOURCE + " "
                         + "WHERE aggregate_type = ? AND aggregate_id = ? ORDER BY sequence DESC LIMIT ?) recent "
                         + "ORDER BY sequence ASC",
                 MAPPER, aggregate.type().name(), aggregate.id(), limit);
@@ -55,14 +64,14 @@ public final class MySqlAuditRepository implements AuditRepository {
 
     @Override
     public List<AuditEvent> findFromSequence(AggregateRef aggregate, long fromSequenceInclusive) {
-        return jdbc.query("SELECT " + COLUMNS + " FROM audit_events "
+        return jdbc.query("SELECT " + COLUMNS + " FROM " + SOURCE + " "
                         + "WHERE aggregate_type = ? AND aggregate_id = ? AND sequence >= ? ORDER BY sequence ASC",
                 MAPPER, aggregate.type().name(), aggregate.id(), fromSequenceInclusive);
     }
 
     @Override
     public Optional<AuditEvent> findByEventHash(AggregateRef aggregate, String eventHash) {
-        return jdbc.query("SELECT " + COLUMNS + " FROM audit_events "
+        return jdbc.query("SELECT " + COLUMNS + " FROM " + SOURCE + " "
                         + "WHERE aggregate_type = ? AND aggregate_id = ? AND event_hash = ? LIMIT 1",
                 MAPPER, aggregate.type().name(), aggregate.id(), eventHash).stream().findFirst();
     }

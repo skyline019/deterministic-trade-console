@@ -45,6 +45,19 @@ test('HTTPS cookie login keeps session secret out of JS-readable storage', async
   await expect(page.getByRole('heading', { name: '进入交易控制台' })).toBeVisible()
 })
 
+test('a reload keeps the cookie session instead of dropping the operator back to login', async ({ page }) => {
+  await login(page)
+
+  const checked = page.waitForResponse(
+    (res) => res.url().includes('/api/v1/auth/me') && res.request().method() === 'GET',
+  )
+  await page.reload()
+  // The stored record carries no access token; identity is re-proven against /auth/me.
+  expect((await checked).status()).toBe(200)
+  await expect(page.getByRole('heading', { name: '运行概览', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '进入交易控制台' })).toBeHidden()
+})
+
 test('cookie write path rejects missing CSRF and accepts matching double-submit', async ({ page, request }) => {
   await login(page)
   const cookies = await page.context().cookies()
