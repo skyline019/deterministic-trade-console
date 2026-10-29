@@ -88,6 +88,19 @@ jobs:
           cache: maven
       - name: Migrations, archive relocation and concurrency contracts
         run: ./mvnw -B -e -Pintegration verify
+      - name: Annotate failing tests (visible on the PR without the raw log)
+        if: failure()
+        run: ./scripts/ci-annotate-failure.sh || true
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-reports
+          path: |
+            target/surefire-reports
+            target/failsafe-reports
+          retention-days: 7
+          if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------------------------
   # Everything below needs a real container runtime, which a developer laptop or a restricted
@@ -136,6 +149,9 @@ jobs:
         run: ./scripts/contend.sh http://127.0.0.1:8080
       - name: Maintenance — archive relocation, expiry sweep, V6 index
         run: ./scripts/ci-maintenance-check.sh http://127.0.0.1:8080
+      - name: Annotate maintenance drill failure
+        if: failure()
+        run: ./scripts/ci-annotate-failure.sh /tmp/maintenance-check.log || true
       - name: Install locked frontend dependencies and Chromium
         working-directory: frontend
         run: |
@@ -159,6 +175,7 @@ jobs:
             frontend/playwright-report-same-origin
             frontend/playwright-report-https-cookie
           retention-days: 7
+          if-no-files-found: ignore
       - name: Dump stack logs on failure
         if: failure()
         run: docker compose logs --no-color --tail 500

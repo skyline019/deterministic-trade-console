@@ -16,11 +16,17 @@ ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD:-local-admin-only}
 RUN_ID="maint-$(date +%s)-$$"
 SKU="SKU-MAINT-$(date +%s)-$$"
 TMP_DIR=$(mktemp -d)
+# Stable path so the CI failure step can annotate it (see .github/workflows/ci.yml).
+LOG=${MAINTENANCE_CHECK_LOG:-/tmp/maintenance-check.log}
+: > "$LOG"
 TOKEN=''
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 
 fail() {
     printf 'MAINTENANCE CHECK FAILED: %s\n' "$1" >&2
+    printf 'MAINTENANCE CHECK FAILED: %s\n' "$1" >> "$LOG"
+    # ::error:: makes the reason a PR annotation instead of a log line nobody can open.
+    printf '::error title=maintenance drill::%s\n' "$1" >&2
     exit 1
 }
 
@@ -48,11 +54,13 @@ expect_status() {
 maintenance() {
     command=$1
     shift
+    printf '=== maintenance %s ===\n' "$command" >> "$LOG"
     docker compose run --rm --no-deps \
         -e SPRING_MAIN_WEB_APPLICATION_TYPE=none \
         -e TRADE_MAINTENANCE_COMMAND="$command" \
         -e TRADE_MAINTENANCE_EXIT_AFTER=true \
         "$@" app 2>&1 | tee "$TMP_DIR/$command.log" >&2
+    cat "$TMP_DIR/$command.log" >> "$LOG"
     grep -q 'MAINTENANCE_OK' "$TMP_DIR/$command.log" \
         || fail "maintenance command '$command' did not report MAINTENANCE_OK"
     sed -n 's/.*MAINTENANCE_OK .*affected=\([0-9][0-9]*\).*/\1/p' "$TMP_DIR/$command.log" | tail -1
@@ -70,6 +78,7 @@ printf '%s\n' '=== V6 archive scan index is present after migrate ==='
 index_count=$(sql "SELECT COUNT(*) FROM information_schema.statistics
     WHERE table_schema = DATABASE() AND table_name = 'audit_events'
       AND index_name = 'idx_audit_aggregate_occurred'")
+note "index_count=$index_count"
 [ "$index_count" = '1' ] || fail "idx_audit_aggregate_occurred missing (count=$index_count)"
 
 printf '%s\n' '=== seed stock and two reservations ==='
@@ -87,6 +96,10 @@ ORDER_A=$(place order-a 2 | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 ORDER_B=$(place order-b 1 | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 [ -n "$ORDER_A" ] && [ -n "$ORDER_B" ] || fail 'failed to place the drill orders'
 
+note() {
+    printf '%s\n' "$1" >> "$LOG"
+}
+
 assert_ledger() {
     api GET "/api/v1/inventory/$SKU" > "$TMP_DIR/inventory.json"
     grep -q "\"available\":$1" "$TMP_DIR/inventory.json" \
@@ -102,6 +115,7 @@ archived=$(maintenance archive-audit -e TRADE_MAINTENANCE_AUDIT_QUIET_BEFORE=PT1
 [ "${archived:-0}" -ge 1 ] || fail "archive-audit archived $archived aggregates, expected >= 1"
 
 archive_rows=$(sql 'SELECT COUNT(*) FROM audit_events_archive')
+note "archive_rows=$archive_rows after archive-audit"
 [ "$archive_rows" -ge 1 ] || fail 'archive table is empty after archive-audit'
 order_b_archived=$(sql "SELECT COUNT(*) FROM audit_events_archive
     WHERE aggregate_type = 'ORDER' AND aggregate_id = '$ORDER_B'")
