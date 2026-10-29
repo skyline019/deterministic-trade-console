@@ -31,6 +31,10 @@ fail() {
 }
 
 # MySQL client inside the Compose service, independent of the container name.
+note() {
+    printf '%s\n' "$1" >> "$LOG"
+}
+
 sql() {
     docker compose exec -T mysql sh -c \
         'mysql --batch --skip-column-names -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" -e "$1"' _ "$1"
@@ -95,10 +99,6 @@ place() {
 ORDER_A=$(place order-a 2 | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 ORDER_B=$(place order-b 1 | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 [ -n "$ORDER_A" ] && [ -n "$ORDER_B" ] || fail 'failed to place the drill orders'
-
-note() {
-    printf '%s\n' "$1" >> "$LOG"
-}
 
 assert_ledger() {
     api GET "/api/v1/inventory/$SKU" > "$TMP_DIR/inventory.json"

@@ -4,6 +4,8 @@ import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.FlywayException;
 import org.flywaydb.core.api.output.MigrateResult;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
@@ -88,8 +90,21 @@ class MigrationIT {
             assertThat(tableExists(mysql, "audit_events"))
                     .as("a refused migration must not create business tables")
                     .isFalse();
+        }
+    }
 
-            // Explicit, one-off legacy adoption (documented in docs/migrations.md) still works.
+    @Test
+    void explicit_baseline_adopts_a_legacy_database_that_already_satisfies_v1() throws Exception {
+        try (MySQLContainer<?> mysql = newContainer("trade")) {
+            mysql.start();
+            // A real legacy database: it already has the V1 surface, just no Flyway history.
+            // Baselining at V1 tells Flyway to skip V1, so V1's tables must already exist —
+            // this is exactly the assumption operators take on when they set the flag.
+            try (Connection connection = connection(mysql)) {
+                ScriptUtils.executeSqlScript(connection,
+                        new ClassPathResource("db/migration/V1__baseline_schema.sql"));
+            }
+
             MigrateResult baselined = Flyway.configure()
                     .dataSource(mysql.getJdbcUrl(), mysql.getUsername(), mysql.getPassword())
                     .locations(MIGRATION_LOCATION)
@@ -97,10 +112,36 @@ class MigrationIT {
                     .baselineVersion("1")
                     .load()
                     .migrate();
+
             assertThat(baselined.migrationsExecuted)
-                    .as("baseline at V1 then apply V2..Vn")
+                    .as("baseline at V1 then apply V2..Vn (V1 is assumed present, not re-run)")
                     .isGreaterThanOrEqualTo(5);
             assertThat(migratedVersions(mysql)).containsSubsequence("1", "2", "3", "4", "5", "6");
+            assertThat(columnExists(mysql, "orders", "expires_at")).isTrue();
+            assertThat(tableExists(mysql, "audit_events_archive")).isTrue();
+        }
+    }
+
+    @Test
+    void baselining_at_v1_without_the_v1_surface_fails_instead_of_producing_a_broken_schema() throws Exception {
+        try (MySQLContainer<?> mysql = newContainer("trade")) {
+            mysql.start();
+            // The trap operators hit: an unrelated legacy table plus baseline-on-migrate=true is
+            // accepted, V1 is skipped, and the first dependent migration fails. Pin that behaviour
+            // so the runbook keeps telling people to verify the V1 surface before baselining.
+            try (Connection connection = connection(mysql); Statement statement = connection.createStatement()) {
+                statement.execute("CREATE TABLE stray_legacy_table (id INT PRIMARY KEY)");
+            }
+
+            assertThatThrownBy(() -> Flyway.configure()
+                    .dataSource(mysql.getJdbcUrl(), mysql.getUsername(), mysql.getPassword())
+                    .locations(MIGRATION_LOCATION)
+                    .baselineOnMigrate(true)
+                    .baselineVersion("1")
+                    .load()
+                    .migrate())
+                    .as("skipping V1 without its tables must surface as a migration failure, not a silent gap")
+                    .isInstanceOf(FlywayException.class);
         }
     }
 
