@@ -113,6 +113,35 @@ public final class ReservationExpiryConcept implements Concept {
             expectEquals(10, fixture.available());
         });
 
+        tests.test("an_unreadable_row_is_reported_without_wedging_the_sweep", () -> {
+            ConceptFixture fixture = new ConceptFixture();
+            fixture.seed(10);
+            Quantity qty = new Quantity(2);
+            expectTrue(fixture.inventory.tryReserve(SKU, qty, NOW));
+            Order expired = Order.reserved(OrderId.random(), new RequestId("wedge-src"), SKU, qty,
+                    NOW.minusSeconds(7200), NOW.minusSeconds(60));
+            fixture.orders.insert(expired);
+            // A stored row the domain refuses to materialise (pre-V7 corruption) must cost the sweep
+            // one slot, not the whole batch.
+            fixture.orders.unreadableRows.add(
+                    "stored order 00000000-0000-0000-0000-00000000dead violates a domain invariant: "
+                            + "reserved order expiresAt must be after createdAt");
+
+            MaintenanceService maintenance = new MaintenanceService(noopStore(), auditService(fixture),
+                    fixture.orders, fixture.transitions, CLOCK);
+            SweepReport report = maintenance.expireReservations(10);
+            expectEquals(2, report.attempted());
+            expectEquals(1, report.applied());
+            expectEquals(1, report.failed());
+            expectFalse(report.complete());
+            expectTrue(report.failures().get(0).contains("violates a domain invariant"));
+
+            // The healthy reservation was still released through the normal cancel ledger.
+            expectEquals(OrderStatus.CANCELLED, fixture.orders.findById(expired.id()).orElseThrow().status());
+            expectEquals(0, fixture.reserved());
+            expectEquals(10, fixture.available());
+        });
+
         tests.test("one_racing_order_does_not_abort_the_sweep", () -> {
             ConceptFixture fixture = new ConceptFixture();
             fixture.seed(10);

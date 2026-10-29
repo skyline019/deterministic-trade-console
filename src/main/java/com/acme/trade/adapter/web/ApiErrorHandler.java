@@ -9,6 +9,7 @@ import com.acme.trade.application.exception.RequestInProgressException;
 import com.acme.trade.application.exception.ResourceConflictException;
 import com.acme.trade.application.exception.ResourceNotFoundException;
 import com.acme.trade.application.exception.StockAdjustmentRejectedException;
+import com.acme.trade.application.exception.StoredStateInvalidException;
 import com.acme.trade.domain.exception.AccessDeniedException;
 import com.acme.trade.domain.exception.OrderStateConflictException;
 import com.acme.trade.domain.exception.ValidationException;
@@ -59,6 +60,11 @@ public final class ApiErrorHandler {
             return response(request, HttpStatus.CONFLICT, "REQUEST_IN_PROGRESS", exception.getMessage());
         } catch (ResourceNotFoundException exception) {
             return response(request, HttpStatus.NOT_FOUND, "NOT_FOUND", exception.getMessage());
+        } catch (StoredStateInvalidException exception) {
+            // The caller sent nothing invalid: a stored row no longer satisfies a domain invariant.
+            log.error("Stored state violates a domain invariant for {}", request.path(), exception);
+            return response(request, HttpStatus.INTERNAL_SERVER_ERROR, "STORED_STATE_INVALID",
+                    "stored state is inconsistent; operator attention required");
         } catch (LockUnavailableException exception) {
             log.warn("Lock infrastructure unavailable for {}", request.path(), exception);
             return response(request, HttpStatus.SERVICE_UNAVAILABLE, "LOCK_UNAVAILABLE", "please retry later");

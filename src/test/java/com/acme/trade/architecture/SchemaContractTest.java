@@ -63,6 +63,16 @@ class SchemaContractTest {
     }
 
     @Test
+    void v7_enforces_the_order_timestamp_invariants_the_domain_checks_on_read() throws IOException {
+        String migration = resource("db/migration/V7__order_timestamp_invariants.sql");
+        // MySqlOrderRepository materialises every row through Order's constructor, so a row that breaks
+        // either invariant cannot be read (500 STORED_STATE_INVALID) or swept. V7 keeps it out of the table.
+        assertThat(migration).contains("chk_orders_updated_after_created CHECK (updated_at >= created_at)",
+                "chk_orders_reserved_expiry",
+                "status <> 'RESERVED' OR (expires_at IS NOT NULL AND expires_at > created_at)");
+    }
+
+    @Test
     void migration_versions_are_contiguous_and_forward_only() throws IOException, URISyntaxException {
         List<String> files = migrationFiles();
         List<Integer> versions = files.stream().map(SchemaContractTest::versionOf).toList();

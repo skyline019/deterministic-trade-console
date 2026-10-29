@@ -3,6 +3,7 @@ package concept;
 import com.acme.trade.application.command.PlaceOrderCommand;
 import com.acme.trade.application.exception.DuplicateRequestException;
 import com.acme.trade.application.port.AuditRecorder;
+import com.acme.trade.application.port.ExpiredReservationScan;
 import com.acme.trade.application.port.InventoryOperationRepository;
 import com.acme.trade.application.port.InventoryRepository;
 import com.acme.trade.application.port.LockHandle;
@@ -334,13 +335,17 @@ final class ConceptFixture {
                     .sorted(order.reversed()).limit(fetchLimit).toList();
         }
 
+        /** Stored rows that cannot be materialised (simulates pre-V7 corruption). */
+        final List<String> unreadableRows = new ArrayList<>();
+
         @Override
-        public synchronized List<Order> findExpiredReserved(Instant now, int limit) {
-            return byRequest.values().stream()
+        public synchronized ExpiredReservationScan findExpiredReserved(Instant now, int limit) {
+            List<Order> expired = byRequest.values().stream()
                     .filter(order -> order.isExpiredAt(now))
                     .sorted(Comparator.comparing(Order::expiresAt).thenComparing(o -> o.id().toString()))
                     .limit(limit)
                     .toList();
+            return new ExpiredReservationScan(expired, unreadableRows);
         }
 
         @Override

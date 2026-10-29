@@ -58,6 +58,7 @@ Redis 锁显著减少同键冲突，但不是正确性的最后防线。锁 key 
 | 审计归档后继续追加 | 读取跨越 `audit_events` 与 `audit_events_archive`，sequence 从归档 tip 继续，验链仍覆盖已归档前缀 | `MySqlAuditRepository` UNION 读取 + 有界 copy/delete（INV-014） |
 | 归档与并发追加交错 | 复制集合与删除集合都由复制前的 `MAX(sequence)` 界定，窗口内新事件留在在线表 | `MySqlMaintenanceStore` 有界删除 |
 | 维护批次中单个订单失败 | 该订单记入 `SweepReport`，其余订单继续，批次不会整体回滚 | `MaintenanceService` 逐项隔离（INV-015） |
+| 库里的行违反领域不变量（历史脏写） | 读该行是 `500 STORED_STATE_INVALID`（不是怪调用方的 400）；过期扫描把它记成一条失败，同批其它订单照常取消 | `MySqlOrderRepository.mapRow` 包成 `StoredStateInvalidException` + `ExpiredReservationScan.unreadable`；写入侧由 V7 CHECK 约束拦截 |
 | 超长活跃审计链 | 可选 `CHAIN_CHECKPOINT`；验链可用外带信任的 checkpoint hash 只验后缀 | `AuditChainVerifier.verifySinceTrusted` |
 | 登录限流复位失败 | 不持久化未返回的 Token | reset 先于 Token 事务 |
 | Token 过期、撤销或用户禁用 | 后续请求 401 | 数据库 active actor 查询 |

@@ -31,8 +31,12 @@ public interface OrderRepository {
      */
     boolean updateExpiresAt(OrderId orderId, Instant expectedExpiresAt, Instant newExpiresAt, Instant at);
 
-    /** RESERVED rows with expires_at &lt;= now, oldest first, capped by limit. */
-    List<Order> findExpiredReserved(Instant now, int limit);
+    /**
+     * RESERVED rows with expires_at &lt;= now, oldest first, capped by limit.
+     * Rows whose stored state cannot be materialised are reported in
+     * {@link ExpiredReservationScan#unreadable()} rather than aborting the scan.
+     */
+    ExpiredReservationScan findExpiredReserved(Instant now, int limit);
 
     /** @throws com.acme.trade.application.exception.DuplicateRequestException on request_id conflict */
     void insert(Order order);
