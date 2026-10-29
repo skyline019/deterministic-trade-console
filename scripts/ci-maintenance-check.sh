@@ -133,7 +133,15 @@ grep -q '"checkedEvents":1' "$TMP_DIR/verify-a.json" \
     || fail "archived chain reported the wrong event count (expected 1): $(cat "$TMP_DIR/verify-a.json")"
 
 printf '%s\n' '=== expire-reservations cancels through the cancel ledger ==='
-sql "UPDATE orders SET expires_at = NOW(6) - INTERVAL 1 MINUTE WHERE id = '$ORDER_B'" > /dev/null
+# Age the whole reservation instead of just the deadline: an order created two hours ago with a
+# one-hour TTL is exactly what the sweep exists for. Moving only expires_at into the past would
+# produce a row that violates Order's own invariant (expiresAt must be after createdAt), which the
+# domain rejects on read — a corrupt row is not the same thing as an expired one.
+sql "UPDATE orders
+        SET created_at = NOW(6) - INTERVAL 2 HOUR,
+            updated_at = NOW(6) - INTERVAL 2 HOUR,
+            expires_at = NOW(6) - INTERVAL 1 MINUTE
+      WHERE id = '$ORDER_B'" > /dev/null
 expired_summary=$(maintenance expire-reservations)
 grep -q 'failed=0' "$TMP_DIR/expire-reservations.log" \
     || fail "expire sweep reported failures: $(cat "$TMP_DIR/expire-reservations.log")"
