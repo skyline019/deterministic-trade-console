@@ -78,12 +78,16 @@ expect_status 200 "$login_status" 'login'
 TOKEN=$(sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p' "$TMP_DIR/login.json")
 [ -n "$TOKEN" ] || fail 'login did not return an access token'
 
-printf '%s\n' '=== V6 archive scan index is present after migrate ==='
-index_count=$(sql "SELECT COUNT(*) FROM information_schema.statistics
+printf '%s\n' '=== V6 archive scan index is present with the intended column order ==='
+# information_schema.statistics has one row per index *column*, so count the shape, not the rows:
+# the scan is only useful if occurred_at is part of the (aggregate_type, aggregate_id) prefix.
+index_columns=$(sql "SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index)
+    FROM information_schema.statistics
     WHERE table_schema = DATABASE() AND table_name = 'audit_events'
       AND index_name = 'idx_audit_aggregate_occurred'")
-note "index_count=$index_count"
-[ "$index_count" = '1' ] || fail "idx_audit_aggregate_occurred missing (count=$index_count)"
+note "idx_audit_aggregate_occurred columns=$index_columns"
+[ "$index_columns" = 'aggregate_type,aggregate_id,occurred_at,sequence' ] \
+    || fail "idx_audit_aggregate_occurred has columns '$index_columns', expected aggregate_type,aggregate_id,occurred_at,sequence"
 
 printf '%s\n' '=== seed stock and two reservations ==='
 expect_status 201 "$(curl -sS -o /dev/null -w '%{http_code}' \
